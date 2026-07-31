@@ -529,8 +529,9 @@ func renderCommitDiff(sha, headline string, files []diff.File) []string {
 	}
 	for _, f := range files {
 		out = append(out, diffHeaderStyle.Render("File: "+f.Path))
-		for _, line := range f.Rendered {
-			out = append(out, renderDiffLine(line))
+		hlLines := highlightedDiffLines(f)
+		for i, line := range f.Rendered {
+			out = append(out, renderDiffLine(line, hlLines[i]))
 		}
 	}
 	return out
@@ -552,14 +553,15 @@ func renderDiffFile(m Model, idx int) []string {
 		}
 	}
 	file := m.DiffFiles[idx]
+	hlLines := highlightedDiffLines(file)
 	lines := []string{diffHeaderStyle.Render("File: " + file.Path)}
-	for _, line := range file.Rendered {
-		lines = append(lines, renderDiffLine(line))
+	for i, line := range file.Rendered {
+		lines = append(lines, renderDiffLine(line, hlLines[i]))
 	}
 	return lines
 }
 
-func renderDiffLine(line diff.RenderedLine) string {
+func renderDiffLine(line diff.RenderedLine, code string) string {
 	switch line.Kind {
 	case diff.LineKindHunkHeader:
 		return diffHunkStyle.Render(line.Text)
@@ -567,13 +569,25 @@ func renderDiffLine(line diff.RenderedLine) string {
 		return diffMetaStyle.Render(line.Text)
 	}
 	gutter := diffMetaStyle.Render(fmt.Sprintf("%4s %4s │ ", diffLineNo(line.OldNo), diffLineNo(line.NewNo)))
+	if code == "" {
+		// Exact pre-change output: kind color wraps the marker and text together.
+		switch line.Kind {
+		case diff.LineKindAdd:
+			return gutter + diffAddStyle.Render("+ "+line.Text)
+		case diff.LineKindDel:
+			return gutter + diffDelStyle.Render("- "+line.Text)
+		default:
+			return gutter + "  " + line.Text
+		}
+	}
+	// Syntax-highlighted path: marker retains kind color; code carries token colors.
 	switch line.Kind {
 	case diff.LineKindAdd:
-		return gutter + diffAddStyle.Render("+ "+line.Text)
+		return gutter + diffAddStyle.Render("+ ") + code
 	case diff.LineKindDel:
-		return gutter + diffDelStyle.Render("- "+line.Text)
+		return gutter + diffDelStyle.Render("- ") + code
 	default:
-		return gutter + "  " + line.Text
+		return gutter + "  " + code
 	}
 }
 
