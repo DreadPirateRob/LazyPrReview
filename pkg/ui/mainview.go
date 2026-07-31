@@ -8,8 +8,9 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
-	"github.com/DreadPirateRob/LazyPrReview/pkg/domain"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/DreadPirateRob/LazyPrReview/pkg/domain"
 )
 
 // setMainLines replaces the Main pane content and bumps the render generation,

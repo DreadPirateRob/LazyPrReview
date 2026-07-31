@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
 	"github.com/DreadPirateRob/LazyPrReview/pkg/config"
 	ghforge "github.com/DreadPirateRob/LazyPrReview/pkg/forge/github"
 	"github.com/DreadPirateRob/LazyPrReview/pkg/ghcli"

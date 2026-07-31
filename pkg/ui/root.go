@@ -4,9 +4,8 @@ import (
 	"strings"
 	"time"
 
-	lipgloss "charm.land/lipgloss/v2"
-
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 
 	"github.com/DreadPirateRob/LazyPrReview/pkg/config"
 	"github.com/DreadPirateRob/LazyPrReview/pkg/forge"

@@ -1,10 +1,10 @@
 package config
 
 type Config struct {
-	GUI       GUIConfig                    `yaml:"gui"`
-	GitHub    GitHubConfig                 `yaml:"github"`
-	OS        OSConfig                     `yaml:"os"`
-	Keybinding map[string]map[string]any   `yaml:"keybinding"`
+	GUI        GUIConfig                 `yaml:"gui"`
+	GitHub     GitHubConfig              `yaml:"github"`
+	OS         OSConfig                  `yaml:"os"`
+	Keybinding map[string]map[string]any `yaml:"keybinding"`
 }
 
 type GUIConfig struct {
@@ -18,7 +18,7 @@ type GUIConfig struct {
 	ShowBottomLine         bool        `yaml:"showBottomLine"`
 	// DiffPager pipes each file's raw diff through an external renderer
 	// (e.g. "delta --paging=never") instead of the built-in diff view.
-	DiffPager              string      `yaml:"diffPager"`
+	DiffPager string `yaml:"diffPager"`
 }
 
 type ThemeConfig struct {

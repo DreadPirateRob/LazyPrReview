@@ -12,6 +12,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
 	"github.com/DreadPirateRob/LazyPrReview/pkg/config"
 	"github.com/DreadPirateRob/LazyPrReview/pkg/forge"
 	ghforge "github.com/DreadPirateRob/LazyPrReview/pkg/forge/github"

@@ -2,6 +2,7 @@ package ui
 
 import (
 	tea "charm.land/bubbletea/v2"
+
 	"github.com/DreadPirateRob/LazyPrReview/pkg/ghcli"
 )
 

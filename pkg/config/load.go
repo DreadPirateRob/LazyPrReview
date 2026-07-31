@@ -10,8 +10,9 @@ import (
 
 	"dario.cat/mergo"
 	"github.com/adrg/xdg"
-	"github.com/DreadPirateRob/LazyPrReview/pkg/ui/keymap"
 	"gopkg.in/yaml.v3"
+
+	"github.com/DreadPirateRob/LazyPrReview/pkg/ui/keymap"
 )
 
 const (
@@ -77,7 +78,7 @@ func Validate(cfg Config) error {
 		return fmt.Errorf("unknown filterMode %q", cfg.GUI.FilterMode)
 	}
 	for name, arr := range map[string][]string{
-		"activeBorderColor": cfg.GUI.Theme.ActiveBorderColor,
+		"activeBorderColor":   cfg.GUI.Theme.ActiveBorderColor,
 		"inactiveBorderColor": cfg.GUI.Theme.InactiveBorderColor,
 		"selectedLineBgColor": cfg.GUI.Theme.SelectedLineBgColor,
 	} {

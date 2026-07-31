@@ -33,12 +33,12 @@ type File struct {
 }
 
 type Hunk struct {
-	Header    string
-	OldStart  int
-	OldLines  int
-	NewStart  int
-	NewLines  int
-	Lines     []RenderedLine
+	Header   string
+	OldStart int
+	OldLines int
+	NewStart int
+	NewLines int
+	Lines    []RenderedLine
 }
 
 type RenderedLine struct {

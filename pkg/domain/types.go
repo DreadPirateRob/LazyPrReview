@@ -21,34 +21,34 @@ type ChangedFile struct {
 }
 
 type Comment struct {
-	ID             string
-	FullDatabaseID int64
-	Body           string
-	State          string
-	Author         string
-	CreatedAt      time.Time
-	LastEditedAt   *time.Time
-	URL            string
-	ViewerDidAuthor bool
-	Path           string
-	Line           *int
-	StartLine      *int
-	Outdated       bool
-}
-
-type Thread struct {
 	ID              string
-	IsResolved      bool
-	IsOutdated      bool
+	FullDatabaseID  int64
+	Body            string
+	State           string
+	Author          string
+	CreatedAt       time.Time
+	LastEditedAt    *time.Time
+	URL             string
+	ViewerDidAuthor bool
 	Path            string
 	Line            *int
 	StartLine       *int
-	DiffSide        string
-	StartDiffSide   string
-	ResolvedBy      string
+	Outdated        bool
+}
+
+type Thread struct {
+	ID               string
+	IsResolved       bool
+	IsOutdated       bool
+	Path             string
+	Line             *int
+	StartLine        *int
+	DiffSide         string
+	StartDiffSide    string
+	ResolvedBy       string
 	ViewerCanResolve bool
-	ViewerCanReply  bool
-	Comments        []Comment
+	ViewerCanReply   bool
+	Comments         []Comment
 }
 
 type Review struct {

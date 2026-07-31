@@ -8,11 +8,11 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/DreadPirateRob/LazyPrReview/pkg/diff"
 	"github.com/DreadPirateRob/LazyPrReview/pkg/domain"
 	"github.com/DreadPirateRob/LazyPrReview/pkg/forge"
-	"github.com/charmbracelet/x/ansi"
 )
 
 type composeKind string

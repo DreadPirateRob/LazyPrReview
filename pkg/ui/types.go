@@ -5,6 +5,7 @@ import (
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
+
 	"github.com/DreadPirateRob/LazyPrReview/pkg/config"
 	"github.com/DreadPirateRob/LazyPrReview/pkg/diff"
 	"github.com/DreadPirateRob/LazyPrReview/pkg/domain"
