@@ -798,21 +798,41 @@ func highlightSelection(body string, anchor, width int, focused bool, span int) 
 	return strings.Join(lines, "\n")
 }
 
-// selectionRow lays style's background under content while keeping content's
-// own foreground colors intact. lipgloss resets (\x1b[m / \x1b[0m) inside the
-// row would otherwise clear the background mid-line, so the background opener is
-// re-applied after each reset. Degrades to plain content when the active color
-// profile emits no styling (e.g. NO_COLOR).
+// selectionRow lays style's background under content while keeping content's own
+// foreground colors intact — the shared background compositor, used both for the
+// selection highlight and for the add/delete diff bands. lipgloss resets
+// (\x1b[m / \x1b[0m) inside the row would otherwise clear the background mid-line,
+// so the background opener is re-applied after each reset. Degrades to plain
+// content when the active color profile emits no styling (e.g. NO_COLOR).
+//
+// A diff row arrives with its band already baked in. Selection SUPPRESSES that band
+// rather than layering over part of it: the band opener is swapped for this row's
+// background so exactly one background owns the whole row.
 func selectionRow(style lipgloss.Style, content string) string {
-	sample := style.Render(" ")
-	sp := strings.IndexByte(sample, ' ')
-	if sp <= 0 {
+	open := bandOpener(style)
+	if open == "" {
 		return content
 	}
-	open, closer := sample[:sp], sample[sp+1:]
+	sample := style.Render(" ")
+	closer := sample[strings.IndexByte(sample, ' ')+1:]
+	for _, band := range []string{bandOpener(diffAddBandStyle), bandOpener(diffDelBandStyle)} {
+		if band != "" && band != open {
+			content = strings.ReplaceAll(content, band, open)
+		}
+	}
 	content = strings.ReplaceAll(content, "\x1b[0m", "\x1b[0m"+open)
 	content = strings.ReplaceAll(content, "\x1b[m", "\x1b[m"+open)
 	return open + content + closer
+}
+
+// bandOpener returns the escape sequence that switches a style's background on, or
+// "" when the active color profile emits no styling.
+func bandOpener(style lipgloss.Style) string {
+	sample := style.Render(" ")
+	if sp := strings.IndexByte(sample, ' '); sp > 0 {
+		return sample[:sp]
+	}
+	return ""
 }
 
 var (

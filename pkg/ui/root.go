@@ -414,7 +414,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Toast = NewToast(msg.Err.Error())
 			return m, nil
 		}
-		m = setMainLines(m, renderCommitDiff(msg.SHA, msg.Headline, msg.Files))
+		m = setMainLines(m, renderCommitDiff(msg.SHA, msg.Headline, msg.Files, mainContentWidth(m)))
 		m.MainMode = MainDiff
 		m.MainFileIndex = -1 // commit diff is not a PR-file view; disable line comments
 		m.MainCursor = 0

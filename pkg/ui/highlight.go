@@ -3,10 +3,12 @@ package ui
 import (
 	"bytes"
 	"hash/fnv"
+	"image/color"
 	"strconv"
 	"strings"
 	"sync"
 
+	lipgloss "charm.land/lipgloss/v2"
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
@@ -15,6 +17,38 @@ import (
 
 	"github.com/DreadPirateRob/LazyPrReview/pkg/diff"
 )
+
+// highlightStyleName is the chroma style used for both token colours and the
+// add/delete band tints, so the two cannot drift apart.
+const highlightStyleName = "monokai"
+
+// diffBandStyle is the row background that marks a line as added or deleted. It is
+// what tells you at a glance which side a line is on: colouring only the one-column
+// `+`/`-` marker left that to a single character.
+//
+// The tints come from the same chroma style that colours the tokens, exposed as the
+// GenericInserted / GenericDeleted backgrounds, so band and code agree visually. A
+// style may set those equal to its own page background — monokai, our current
+// style, sets both to #272822 — which would paint an invisible band, so that case
+// falls back to explicit tints kept dark enough to stay legible under bright tokens.
+var (
+	diffAddBandStyle = lipgloss.NewStyle().Background(diffBandColour(chroma.GenericInserted, "#12331f"))
+	diffDelBandStyle = lipgloss.NewStyle().Background(diffBandColour(chroma.GenericDeleted, "#3a1618"))
+)
+
+// diffBandColour resolves one band tint, preferring the active chroma style.
+func diffBandColour(tt chroma.TokenType, fallback string) color.Color {
+	sty := styles.Get(highlightStyleName)
+	if sty == nil {
+		return lipgloss.Color(fallback)
+	}
+	bg := sty.Get(tt).Background
+	if !bg.IsSet() || bg == sty.Get(chroma.Background).Background {
+		// Unset, or indistinguishable from the page the code sits on: no band.
+		return lipgloss.Color(fallback)
+	}
+	return lipgloss.Color(bg.String())
+}
 
 // diffHighlightMaxLines is the performance floor: above this many rendered lines a
 // file is shown without syntax highlighting. SPEC §10 states this bound.
@@ -118,7 +152,7 @@ func computeHighlightedDiffLines(file diff.File) []string {
 	}
 	lex = chroma.Coalesce(lex)
 
-	sty := styles.Get("monokai")
+	sty := styles.Get(highlightStyleName)
 	if sty == nil {
 		sty = styles.Fallback
 	}

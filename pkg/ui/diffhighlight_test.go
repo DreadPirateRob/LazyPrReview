@@ -123,10 +123,11 @@ func TestDiffHighlightGoFileProducesANSI(t *testing.T) {
 
 // ── unknown-path fallback ──────────────────────────────────────────────────────
 
-// TestDiffHighlightUnknownPathFallback verifies that a file with an
-// unrecognised extension returns all-"" highlights, and that renderDiffLine
-// with those "" values produces output byte-identical to the pre-change renderer
-// (which colored marker + text together with the kind style).
+// TestDiffHighlightUnknownPathFallback verifies that a file with an unrecognised
+// extension returns all-"" highlights, and that renderDiffLine still renders the
+// row correctly from the raw text. At width 0 there is no room to band, so the
+// output is byte-identical to the pre-band renderer; see
+// TestDiffBandAppliesWithoutLexer for the banded case.
 func TestDiffHighlightUnknownPathFallback(t *testing.T) {
 	rawDiff := `diff --git a/data.xq7z9 b/data.xq7z9
 --- a/data.xq7z9
@@ -148,16 +149,15 @@ func TestDiffHighlightUnknownPathFallback(t *testing.T) {
 		}
 	}
 
-	// With all-"" highlights renderDiffLine must fall back to exact pre-change output.
 	for _, line := range file.Rendered {
-		got := renderDiffLine(line, "")
+		got := renderDiffLine(line, "", 0)
 		var want string
 		gutter := diffMetaStyle.Render(fmt.Sprintf("%4s %4s │ ", diffLineNo(line.OldNo), diffLineNo(line.NewNo)))
 		switch line.Kind {
 		case diff.LineKindAdd:
-			want = gutter + diffAddStyle.Render("+ "+line.Text)
+			want = gutter + diffAddStyle.Render("+ ") + line.Text
 		case diff.LineKindDel:
-			want = gutter + diffDelStyle.Render("- "+line.Text)
+			want = gutter + diffDelStyle.Render("- ") + line.Text
 		case diff.LineKindContext:
 			want = gutter + "  " + line.Text
 		case diff.LineKindHunkHeader:
@@ -168,7 +168,7 @@ func TestDiffHighlightUnknownPathFallback(t *testing.T) {
 			continue
 		}
 		if got != want {
-			t.Errorf("fallback line %d (kind=%s): output mismatch\n  got:  %q\n  want: %q",
+			t.Errorf("unbanded line %d (kind=%s): output mismatch\n  got:  %q\n  want: %q",
 				line.RenderIndex, line.Kind, got, want)
 		}
 	}
@@ -364,7 +364,7 @@ func TestDiffHighlightMarkersKindColored(t *testing.T) {
 	for _, line := range file.Rendered {
 		switch line.Kind {
 		case diff.LineKindAdd:
-			rendered := renderDiffLine(line, hl[line.RenderIndex])
+			rendered := renderDiffLine(line, hl[line.RenderIndex], 0)
 			stripped := ansi.Strip(rendered)
 			if !strings.Contains(stripped, "+ ") {
 				t.Errorf("add line missing '+ ' marker: %q", stripped)
@@ -378,7 +378,7 @@ func TestDiffHighlightMarkersKindColored(t *testing.T) {
 				}
 			}
 		case diff.LineKindDel:
-			rendered := renderDiffLine(line, hl[line.RenderIndex])
+			rendered := renderDiffLine(line, hl[line.RenderIndex], 0)
 			stripped := ansi.Strip(rendered)
 			if !strings.Contains(stripped, "- ") {
 				t.Errorf("del line missing '- ' marker: %q", stripped)

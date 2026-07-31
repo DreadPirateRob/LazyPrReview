@@ -518,7 +518,7 @@ var (
 // renderCommitDiff formats one commit's parsed diff into Main-pane lines,
 // headed by the short SHA and message. Standalone — it does not touch
 // m.DiffFiles or the PR-level thread anchors.
-func renderCommitDiff(sha, headline string, files []diff.File) []string {
+func renderCommitDiff(sha, headline string, files []diff.File, width int) []string {
 	short := sha
 	if len(short) > 7 {
 		short = short[:7]
@@ -531,7 +531,7 @@ func renderCommitDiff(sha, headline string, files []diff.File) []string {
 		out = append(out, diffHeaderStyle.Render("File: "+f.Path))
 		hlLines := highlightedDiffLines(f)
 		for i, line := range f.Rendered {
-			out = append(out, renderDiffLine(line, hlLines[i]))
+			out = append(out, renderDiffLine(line, hlLines[i], width))
 		}
 	}
 	return out
@@ -554,14 +554,23 @@ func renderDiffFile(m Model, idx int) []string {
 	}
 	file := m.DiffFiles[idx]
 	hlLines := highlightedDiffLines(file)
+	width := mainContentWidth(m)
 	lines := []string{diffHeaderStyle.Render("File: " + file.Path)}
 	for i, line := range file.Rendered {
-		lines = append(lines, renderDiffLine(line, hlLines[i]))
+		lines = append(lines, renderDiffLine(line, hlLines[i], width))
 	}
 	return lines
 }
 
-func renderDiffLine(line diff.RenderedLine, code string) string {
+// renderDiffLine draws one diff row: line-number gutter, change marker, then the
+// code — syntax-highlighted when code is non-empty, raw otherwise.
+//
+// Added and deleted rows carry a background band across the FULL row, gutter
+// included. Without it the only signal for which side a line is on is the single
+// `+`/`-` glyph, which is far too little once the code itself is syntax-coloured;
+// banding everything but the gutter would just move that notch one column over.
+// The band is independent of highlighting — a file with no lexer still needs it.
+func renderDiffLine(line diff.RenderedLine, code string, width int) string {
 	switch line.Kind {
 	case diff.LineKindHunkHeader:
 		return diffHunkStyle.Render(line.Text)
@@ -569,26 +578,28 @@ func renderDiffLine(line diff.RenderedLine, code string) string {
 		return diffMetaStyle.Render(line.Text)
 	}
 	gutter := diffMetaStyle.Render(fmt.Sprintf("%4s %4s │ ", diffLineNo(line.OldNo), diffLineNo(line.NewNo)))
-	if code == "" {
-		// Exact pre-change output: kind color wraps the marker and text together.
-		switch line.Kind {
-		case diff.LineKindAdd:
-			return gutter + diffAddStyle.Render("+ "+line.Text)
-		case diff.LineKindDel:
-			return gutter + diffDelStyle.Render("- "+line.Text)
-		default:
-			return gutter + "  " + line.Text
-		}
+	body := code
+	if body == "" {
+		body = line.Text
 	}
-	// Syntax-highlighted path: marker retains kind color; code carries token colors.
 	switch line.Kind {
 	case diff.LineKindAdd:
-		return gutter + diffAddStyle.Render("+ ") + code
+		return diffBand(diffAddBandStyle, gutter+diffAddStyle.Render("+ ")+body, width)
 	case diff.LineKindDel:
-		return gutter + diffDelStyle.Render("- ") + code
+		return diffBand(diffDelBandStyle, gutter+diffDelStyle.Render("- ")+body, width)
 	default:
-		return gutter + "  " + code
+		return gutter + "  " + body
 	}
+}
+
+// diffBand lays a tint under a changed row across the pane width, so the whole line
+// reads as changed instead of one coloured glyph. Falls back to the bare row when
+// the width is unknown or too small to band (headless render, tiny pane).
+func diffBand(style lipgloss.Style, content string, width int) string {
+	if width <= 0 {
+		return content
+	}
+	return selectionRow(style, padRight(fitWidth(content, width), width))
 }
 
 func diffLineNo(n *int) string {

@@ -114,7 +114,7 @@ func buildDiffRows(m Model, idx int, width int) ([]string, []mainRow) {
 		appendThreadBlock(m, at, width, add)
 	}
 	for _, line := range file.Rendered {
-		add(renderDiffLine(line, hlLines[line.RenderIndex]), mainRow{Kind: rowCode, RenderIndex: line.RenderIndex})
+		add(renderDiffLine(line, hlLines[line.RenderIndex], width), mainRow{Kind: rowCode, RenderIndex: line.RenderIndex})
 		for _, at := range byAnchor[line.RenderIndex] {
 			appendThreadBlock(m, at, width, add)
 		}
