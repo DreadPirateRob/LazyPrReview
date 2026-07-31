@@ -125,16 +125,49 @@ func TestUnmodeledKeysPassThrough(t *testing.T) {
 	}
 }
 
+// Uses `refresh` rather than `quit`: quit always retains the ctrl+c escape hatch, so
+// it is the wrong vehicle for asserting an exact one-key list.
 func TestDisplayKeysAreCanonicalAndEffective(t *testing.T) {
 	b := Resolve(map[string]map[string][]string{
-		"universal": {"quit": {"<C-X>"}},
+		"universal": {"refresh": {"<C-X>"}},
 	})
 
-	got := b.DisplayKeys(ContextUniversal, "quit")
+	got := b.DisplayKeys(ContextUniversal, "refresh")
 	if len(got) != 1 || got[0] != "<c-x>" {
 		t.Fatalf("? should advertise the remapped key in canonical bracket form, got %v", got)
 	}
-	if keys := b.Keys(ContextUniversal, "quit"); len(keys) != 1 || keys[0] != "ctrl+x" {
+	if keys := b.Keys(ContextUniversal, "refresh"); len(keys) != 1 || keys[0] != "ctrl+x" {
 		t.Fatalf("dispatch needs the tea form, got %v", keys)
+	}
+}
+
+// ctrl+c is honoured unconditionally by dispatch, so the table must keep advertising
+// it: `?` hiding a binding that still works is the same lie the effective table
+// exists to remove. `quit: <disabled>` means "stop q quitting", not "unquittable".
+func TestDisabledQuitKeepsEscapeHatchVisible(t *testing.T) {
+	b := Resolve(map[string]map[string][]string{
+		ContextUniversal: {QuitAction: {"<disabled>"}},
+	})
+
+	display := b.DisplayKeys(ContextUniversal, QuitAction)
+	if len(display) != 1 || display[0] != "<c-c>" {
+		t.Fatalf("? must still advertise ctrl+c for quit, got %v", display)
+	}
+	if got, ok := b.Canonical("files", "ctrl+c"); !ok || got != "q" {
+		t.Fatalf("ctrl+c must still resolve to the quit handler, got %q ok=%v", got, ok)
+	}
+	if _, ok := b.Canonical("files", "q"); ok {
+		t.Fatal("q was disabled and must be swallowed")
+	}
+}
+
+// Remapping quit keeps the hatch too, alongside the new key.
+func TestRemappedQuitKeepsEscapeHatch(t *testing.T) {
+	b := Resolve(map[string]map[string][]string{
+		ContextUniversal: {QuitAction: {"Z"}},
+	})
+
+	if keys := b.Keys(ContextUniversal, QuitAction); len(keys) != 2 || keys[0] != "Z" || keys[1] != "ctrl+c" {
+		t.Fatalf("quit should dispatch on the remap plus the hatch, got %v", keys)
 	}
 }

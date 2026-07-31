@@ -187,7 +187,7 @@ func highlightHunk(lines []diff.RenderedLine, lex chroma.Lexer, sty *chroma.Styl
 				result[l.RenderIndex] = hlOld[oldIdx]
 			}
 			oldIdx++
-		// LineKindHunkHeader: leave "" (already zero value in result).
+			// LineKindHunkHeader: leave "" (already zero value in result).
 		}
 	}
 }

@@ -207,9 +207,9 @@ Every action name is remappable under `keybinding.universal` / `keybinding.<cont
 - **The narrower declaration wins.** Several keys are declared twice at two granularities (universal `togglePrimary` and files `toggleViewed` both claim `<space>`; universal `open` and files `openDiff` both claim `<enter>`). The context declaration is authoritative, so disabling the context action kills the key there even though the universal alias still nominally holds it.
 - **Modal surfaces are exempt.** The composer, menus, `?` help, the filter input and the command log sit outside the keymap contract and match keys literally; a remap never reinterprets their controls.
 
-`ctrl+c` always quits, including when `quit` is disabled — a config must not be able to lock the user in. `centerCursor` (`zz`) is the one non-remappable binding: `ValidateKey` accepts a single rune or a bracketed name, so a two-key sequence cannot be expressed in config. Remapping the single-key `z` fold action does not break `zz`.
+`ctrl+c` always quits, including when `quit` is disabled — a config must not be able to lock the user in. It stays attached to `quit` in the effective table for that reason, so `quit: <disabled>` means "stop `q` quitting", not "make the program unquittable", and `?` keeps showing the key that still works. `centerCursor` (`zz`) is the one genuinely non-remappable binding: `ValidateKey` accepts a single rune or a bracketed name, so a two-key sequence cannot be expressed in config. Remapping the single-key `z` fold action does not break `zz`.
 
-`?` help and the hint bar read the same effective table as dispatch, so a remapped key is advertised in its new form and a disabled action disappears from both entirely.
+`?` help and the hint bar read the same effective table as dispatch, so a remapped key is advertised in its new form and a disabled action disappears from both — except where a binding survives its action being disabled, as with `ctrl+c` above, which must stay listed precisely because it still works.
 
 ### Main-view rebinds (callout)
 

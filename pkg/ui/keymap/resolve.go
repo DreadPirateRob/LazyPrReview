@@ -5,6 +5,15 @@ import "strings"
 // ContextUniversal holds the bindings that apply in every context.
 const ContextUniversal = "universal"
 
+// QuitAction is the action whose binding exits the program.
+const QuitAction = "quit"
+
+// hardQuitKey is honoured unconditionally by dispatch so a config cannot lock the
+// user in. The effective table therefore keeps it attached to `quit` even when the
+// action is remapped or disabled — dropping it would let `?` and the hint bar hide
+// a binding that still works, which is the same lie this table exists to remove.
+const hardQuitKey = "<c-c>"
+
 // TeaKey converts a binding token into the form the TUI compares against.
 //
 // Two syntaxes exist and they are not the same: the action table and config.yml
@@ -103,6 +112,9 @@ func Resolve(overrides map[string]map[string][]string) *Bindings {
 			if override, ok := overrides[ctx][action.Name]; ok {
 				effective = override
 			}
+			if ctx == ContextUniversal && action.Name == QuitAction {
+				effective = withHardQuitKey(effective)
+			}
 			for _, token := range effective {
 				key := TeaKey(token)
 				if key == "" {
@@ -119,6 +131,18 @@ func Resolve(overrides map[string]map[string][]string) *Bindings {
 		}
 	}
 	return b
+}
+
+// withHardQuitKey guarantees the escape hatch is part of quit's effective keys.
+// `quit: <disabled>` therefore means "stop `q` quitting", not "make the program
+// unquittable" — and `?` still shows the key that does.
+func withHardQuitKey(keys []string) []string {
+	for _, k := range keys {
+		if TeaKey(k) == TeaKey(hardQuitKey) {
+			return keys
+		}
+	}
+	return append(append([]string(nil), keys...), hardQuitKey)
 }
 
 // DisplayKey canonicalizes a binding token for presentation: bracketed names are
