@@ -190,10 +190,11 @@ stateDiagram-v2
 
 - **PRs:** `enter` open PR · `C` checkout (P3) · `o` browser · `y` copy · `[`/`]` switch tab (triggers server-side fetch for `Review requested`/`Mine`/`All open`; clears client-side filter) · `/` filter loaded list client-side (all tabs except `Search`) or open search-query input (`Search` tab, `enter` runs server-side)
 - **Files:** moving the cursor follows into Main — a file row shows its diff, a **directory row shows every diff beneath it** concatenated under a `Directory: <path>/ — N files` header. Both follows are skipped when `gui.diffPager` is set (a directory would spawn one process per file). A directory view is not a single-file view, so line-scoped actions (`c` comment, `enter` on a thread, `space` on the header) are inert there — exactly as in a commit-scoped diff; move to a file row to get anchors back. **Every directory action is scoped to the row's VISIBLE subtree**: an active `/` filter narrows both the aggregate diff and `space`, so they always agree with the `✓` and `+N -N` that row displays. Keys: `space` toggle viewed (with `v` range = batch; on a directory row = every visible file in its subtree) · `enter` focus diff (on a directory row = fold/unfold it) · `t` jump to first unresolved thread in file · `` ` `` tree/flat, preserving the selected file across the flip · `-`/`=` collapse/expand all · `c` file-level comment (P2) · `e` open in $EDITOR (P3)
-- **Threads (panel):** `enter` jump to thread in diff + focus it · `space` resolve/unresolve (P2) · tabs live in the border title (`╭─[4]─[Unresolved] - All - Drafts─…╮`); `[`/`]` switch tab and clear that panel's filter
+- **Threads (panel):** moving the cursor follows into Main — it shows that thread's file at the thread, WITHOUT taking focus, so you can walk the list and read each one in place. Following also runs after a tab switch and after a filter mutation, both of which reset the cursor and would otherwise leave Main on a thread the panel no longer highlights. Two exclusions: the **Commits tab**, whose `enter` fetches a commit diff — following there would fire a network request per keystroke (the same rule that keeps the PR list from fetching on `j`/`k`) — and an external `gui.diffPager`, which spawns a process per render. Keys: `enter` jump to thread in diff + focus it · `space` resolve/unresolve (P2) · tabs live in the border title (`╭─[4]─[Unresolved] - All - Drafts─…╮`); `[`/`]` switch tab and clear that panel's filter
 - **Thread-focused (in Main):** `j`/`k` prev/next comment in thread · `r` reply (P2) · `space` resolve/unresolve (P2) · `e` edit own comment (P2) · `d` delete own comment, confirm (P2) · `o` browser permalink · `y` copy · `esc` back to Main cursor
 - **Checks:** `enter` check detail in main · `o` open detailsUrl · `w` watch/poll toggle (P2) · Timeline tab: `a` add issue comment (P2)
 - **Main diff:** `j`/`k` line cursor · `J`/`K`, `ctrl+d`/`ctrl+u` half-page scroll (cursor holds screen row) · `PgDn`/`PgUp` full-page scroll · `zz` center cursor line vertically · `h`/`l` prev/next hunk (rebind; panels via `tab`) · `[`/`]` prev/next file (rebind; no tabs in Main) · `<`/`>` file top/bottom · `t`/`T` next/prev unresolved thread · `m`/`M` next/prev thread mentioning you · `space` toggle current file viewed · `z` fold/unfold thread overlay · `enter` focus thread under cursor (else no-op) · `c` comment at line (P2) · `s` suggestion from selection (P2) · `e` open $EDITOR at line (P3) · `ctrl+w` toggle whitespace · `{`/`}` shrink/expand diff context (P2)
+- **Main overview** (the PR page, `MainMode = overview`): `j`/`k` and the scroll keys as above · `z` fold/unfold the comment or bot run under the cursor · `-`/`=` collapse/expand every foldable row · `b` flag the comment author under the cursor as bot/human (persisted to `authors.yml`, see Config) · `enter`/`c`/`space`/`t`/`T`/`m`/`M` behave as in the diff where they apply. Rows with nobody to flag (the PR header, a section rule, a thread's file-location summary) make `b` inert; rows that are not foldable let `z` fall through to the `zz` centering prefix.
 - **Status:** `e` edit config file
 
 ### Remap syntax
@@ -229,6 +230,40 @@ These meanings never overlap — each context defines exactly one invariant acti
 
 PR list rows are two lines: line 1 is `[state] #num title` (draft/closed/merged badge before the number; closed/merged appear on the Search tab only), line 2 is prefixed with a `╰─` tree connector and reads `author | CI-glyph decision-glyph labels updated | ⎇branch`. Draft PRs are dimmed; the selection highlight covers both rows of the selected PR. `enter` opens PR → loads detail (D5 mega-query, §9) → Main shows the PR overview, focused.
 
+**PR overview composition.** The overview is built as rows (not a flat string), so it
+can fold and be acted on:
+
+1. **Header.** Title; a badge row (`● OPEN`, `✓ APPROVED`, author, `+N -N · N files`,
+   and `✎ N draft` when a pending review exists); the branch pair; then a row for each
+   NON-EMPTY `reviewers` / `assignees` / `labels` list. Empty fields are omitted
+   entirely rather than printed as `—`, so the header is as short as the PR allows —
+   typically 4–6 rows against the 8 the old one-field-per-line layout always spent.
+   Every header row **wraps**: the title with a hanging indent so continuations align
+   under the title text, and the three comma-separated lists pack at
+   ITEM boundaries so a hyphenated name like `release-blocker` is never split. At any
+   usable width the header wraps rather than truncates — the title is the most identifying
+   text on screen. (Below roughly 8 usable columns both helpers fall back to flat
+   emission, and the pane clips as a last resort; there is no layout that fits there.)
+2. **`── Description ──`** — the PR body, markdown-rendered.
+3. **`── Conversation · N (N human · N bot) ──`** — the timeline. Consecutive comments
+   from the same bot collapse into ONE foldable row reporting the count, date span and
+   latest verdict (`▸ github-actions · 5 comments · Apr 07 – Apr 21 · latest ✓ Approved`);
+   expanding it reveals the members, each independently foldable. **Bot comments default
+   collapsed, human comments default expanded** — a CI-heavy PR is otherwise mostly
+   repeated verdicts.
+4. **`── Review threads · N ──`** — the review threads, folding by THREAD ID, i.e. the
+   same key the inline diff blocks use, so a thread folded in one view is folded in both.
+
+Fold state is keyed per row and survives every rebuild (a draft landing, a refetch, a
+resize). Timeline items carry no server ID, so the key is synthetic
+(`kind|author|sortAt|url`); a bot run keys off its FIRST member, so appending a verdict
+extends the run instead of resetting its fold.
+
+**Bot classification.** `isBotAuthor` resolves in order: the user's persisted override,
+then a `[bot]` login suffix, then a built-in default list. The built-in list is only a
+starting point — no hardcoded set keeps up with the CI actors a repo installs — so `b`
+in the overview flags the author under the cursor and the choice persists (see Config).
+
 **Tab fetch model:** `[`/`]` switch the active tab and fetch the corresponding result set from GitHub — unless the tab's cache is still fresh, in which case the cached result renders instantly with no network request and no loading banner. `Review requested`, `Mine`, and `All open` each maintain a per-tab result cache keyed by tab identity; `Search` maintains a per-query cache keyed by the exact query string. Cache TTL equals `github.autoRefreshInterval` (default 60s, min 60s): a cache entry older than one interval is considered stale and triggers a refetch on next access. Manual refresh (`R`) always bypasses the cache and refetches the active tab. Errors are not cached — a failed fetch leaves any prior cached result intact and shows the error banner; the next access retries. On startup, the `Review requested` tab is fetched immediately to warm its cache. `Review requested`, `Mine`, and `All open` fetch up to 50 open PRs server-side (`gh pr list --search "<q> sort:updated-desc" --limit 50`; q = `review-requested:@me`, `author:@me`, or empty). `/` after that filters the cached 50 client-side (substring/fuzzy per `gui.filterMode`). The `Search` tab starts empty; pressing `/` opens a query input where the user types a free-form GitHub search string (supports qualifiers: `is:merged`, `is:closed`, `label:bug`, `author:alice`, etc.); `enter` runs it server-side (`gh pr list --state all --search "<query> sort:updated-desc" --limit 100`) — `/` on the Search tab never performs client-side filtering.
 
 ### 3. Diff reading
@@ -263,14 +298,32 @@ it is visible while collapsed, and `m`/`M` cycle only those threads in file orde
 (including unanchored ones — the set means "threads addressing me", not "code-line
 threads addressing me"). Empty set toasts.
 
-**Row model.** Main lines carry per-line metadata (`code | file header | thread
-summary | comment`) and the cursor indexes ROWS. Inline blocks shift code rows, so
-nothing may assume `line == renderIndex + 1`. That metadata exists ONLY for the
-built-in single-file diff — the PR overview, commit-scoped diffs, directory
-aggregates, and external-pager output leave it empty, which is exactly what keeps
-line-scoped actions inert in those modes. On a thread row `c` is inert (no code line
-to anchor to); a range selection spanning a block skips the block's rows, since it
-consumes Main rows but no file lines.
+**Row model.** Main lines carry per-line metadata and the cursor indexes ROWS, never
+raw line offsets — inline blocks shift code rows, so nothing may assume
+`line == renderIndex + 1`. Kinds: `file header | code | thread summary | comment` for a
+diff, and `meta | section | event header | event body | group header` for the overview.
+Metadata is populated for the **built-in single-file diff** and the **PR overview** — the
+two modes with structure worth addressing. Commit-scoped diffs, directory aggregates, and
+external-pager output leave it empty. Diff line-scoped actions additionally require
+`MainMode == diff`, so an overview row can never be mistaken for a code anchor. On a
+thread row `c` is inert (no code line to anchor to); a range selection spanning a block
+skips the block's rows, since it consumes Main rows but no file lines.
+
+**Markdown rendering.** Comment bodies and the PR description are markdown-rendered and
+wrapped to the pane, in the overview *and* in inline diff blocks — the same renderer for
+both, so the two views cannot drift. Supported: `**bold**`, `*italic*`, `` `code` ``,
+`~~strike~~`, links, ATX headings, bullet/ordered lists (continuations align under the
+text, not the marker), blockquotes, horizontal rules, and fenced code blocks
+syntax-highlighted via chroma. `@mentions` are styled by the same inline pass — they are a
+span like emphasis, so styling them afterwards would mean parsing text that already
+carries ANSI escapes — and the viewer's own handle is styled distinctly. A mention inside
+a code span stays literal, and an email address or `logo@2x.png` is not a mention.
+Rendered lines never exceed the pane budget: word-wrap first, hard-wrap as a last resort
+for an unbreakable token, so nothing is silently clipped. Code block lines are hard-wrapped
+rather than word-wrapped, since wrapping code on spaces corrupts it.
+
+One-line list summaries (Threads panel rows, the Checks Timeline tab) deliberately show
+raw truncated bodies — rendering markdown into a 40-column cell costs more than it returns.
 
 ### 6. Viewed tracking
 
@@ -683,6 +736,33 @@ Config paths are resolved via `adrg/xdg`:
 | Windows | `%LOCALAPPDATA%\lazypr\config.yml` |
 
 A repo-local overlay `.lazypr.yml` at the repo root merges over the global config (`mergo` deep-merge, same precedence model as lazygit: repo-local wins on any key it defines).
+
+### Author roles (`authors.yml`)
+
+Bot/human flags set with `b` in the overview persist to `authors.yml`, a sibling of
+`config.yml` in the same directory (`~/.config/lazypr/authors.yml` on Linux):
+
+```yaml
+# Managed by lazypr. Safe to hand-edit.
+authors:
+    chatgpt-codex-connector: bot
+    github-actions: human
+```
+
+It is a **separate file on purpose.** `config.yml` is user-owned and parsed strictly
+(`KnownFields`), and lazypr has no comment-preserving YAML writer — rewriting it to store a
+flag would destroy the user's comments and formatting. An app-managed sibling in the same
+namespace is the same shape `gh` uses for its own `hosts.yml`.
+
+A **role map** rather than two lists, so an author cannot be simultaneously bot and human.
+`human` entries exist to demote a built-in default; an absent author falls back to the
+built-in list. Keys are lowercased and trimmed (GitHub logins are case-insensitive).
+
+Writes are atomic (temp file + rename in the same directory) so an interrupted save cannot
+truncate existing flags, and the parent directory is created on first use. Unlike
+`config.yml`, a malformed or unreadable `authors.yml` is **non-fatal**: lazypr warns on
+stderr and starts with the built-in defaults. An unknown role value is dropped while the
+rest of the map still loads, so one typo cannot discard every flag.
 
 ### Default configuration
 

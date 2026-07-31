@@ -48,6 +48,74 @@ client-side. On the `Search` tab, `/` takes a raw GitHub query
 `enter` opens the PR → loads detail + diff → **Main shows the PR overview**
 (description, reviewers, labels, timeline, threads) and takes focus.
 
+### Reading the overview
+
+The overview is the PR page: a compact header, the description, then the whole
+conversation. Comment bodies are **markdown-rendered and wrapped** — bold, code
+spans, lists, quotes, and fenced code blocks with syntax highlighting — so you're
+not reading raw `**asterisks**`, and nothing is cut off at the right edge.
+
+```
+#6574  Cj 10354 notification on cade insufficient bal2 with a longer
+       title that wraps
+● OPEN   ✓ APPROVED   fazil56   +2873 -89 · 34 files   ✎ 3 draft
+CJ-10354-notification-on-cade-insufficient-bal2 → master.jul23old
+reviewers DreadPirateRob
+labels release-blocker, Frontend
+
+── Description ─────────────────────────────────────────────────
+JIRA https://example.test/browse/CJ-10354
+
+── Conversation · 24 (16 human · 8 bot) ────────────────────────
+
+▸ github-actions  5 comments · Apr 07 – Apr 21   latest ✓ Approved
+
+▾ DreadPirateRob  comment · Apr 22 20:30
+  ▎ @codex take a look at `notification_service.py`
+
+── Review threads · 3 ──────────────────────────────────────────
+```
+
+| Key | Does |
+|---|---|
+| `j` / `k` | Move (comment rows are navigable) |
+| `z` | Fold / unfold the comment or bot run under the cursor |
+| `-` / `=` | Collapse / expand everything |
+| `b` | Flag the author under the cursor as **bot** or **human** |
+| `t` / `T`, `m` / `M` | Jump to unresolved threads / threads mentioning you |
+
+Three things worth knowing:
+
+- **Bot runs collapse.** Consecutive comments from one bot become a single row with
+  the count, date span, and latest verdict. On a CI-heavy PR that's the difference
+  between 15 rows of repeated `✓ Approved` and one. Expand it with `z` to see the
+  individual comments, each of which folds on its own.
+- **Bots start collapsed, humans start expanded.** So the human conversation reads
+  immediately and the machine noise stays out of the way until you want it.
+- **`✎ 3 draft`** in the header means you have unsubmitted comments waiting — press
+  `S` to submit them.
+
+#### When something isn't classified right
+
+lazypr ships a default list of bot accounts (`github-actions`, `dependabot`,
+`renovate`, …) and treats any `…[bot]` login as a bot. No fixed list keeps up, so
+**`b` flags the author under the cursor** and the choice sticks:
+
+- `b` on a human's comment → treated as a bot from now on (collapses, groups)
+- `b` on a bot's comment → treated as a human (expands, stops grouping)
+
+It saves to `~/.config/lazypr/authors.yml`, which you can hand-edit:
+
+```yaml
+# Managed by lazypr. Safe to hand-edit.
+authors:
+    chatgpt-codex-connector: bot
+    github-actions: human
+```
+
+`b` is inert on rows with nobody to flag — the PR header, a section rule, or a
+thread's `file.go:12` summary line.
+
 ---
 
 ## 2. Work through the files
@@ -166,12 +234,23 @@ the background, so a slow network never blocks you or spawns duplicates.
 
 ## 5. Work the threads
 
-Go to **`[4]` Threads** — tabs `Unresolved` · `All` · `Drafts` via `[` / `]`.
+Go to **`[4]` Threads** — tabs `Unresolved` · `All` · `Drafts` · `Commits` via
+`[` / `]`.
+
+Moving the cursor **follows into Main**, just like the Files panel: Main shows that
+thread's file scrolled to the thread, while focus stays in the panel — so you can
+walk the list with `j` / `k` and read each one in place. `enter` when you want to act
+on one.
 
 | Key | Does |
 |---|---|
+| `j` / `k` | Move — Main follows to that thread |
 | `enter` | Jump Main to the anchor **and** focus the thread |
 | `space` | Resolve / unresolve |
+
+The `Commits` tab deliberately does **not** follow: its `enter` fetches a commit
+diff, so following the cursor would fire a network request per keystroke. Following
+is also off when `gui.diffPager` is set, for the same reason it's off in Files.
 
 Once a thread is focused (its own context):
 
@@ -233,6 +312,7 @@ draft on the pending review. There is no undo.
 
 ```
 Triage      2 · [ ] tabs · / filter · enter to open
+Overview    0 · z fold · -/= fold all · b flag bot/human · t/T · m/M
 Read        3 · j/k (Main follows) · enter · space viewed · ` tree/flat
 Diff        0 · j/k · h/l hunks · [ ] files · t/T threads · zz center
 Comment     c line · v then c range · c in Files = file-level · ctrl+s
@@ -264,3 +344,13 @@ Anywhere: `y` copy menu · `o` open in browser · `R` refresh · `@` command log
   pager's output can't be mapped back to diff lines. You still get diffs on
   `enter`; drop the setting to author inline.
 - **`R` bypasses every cache** when you think you're looking at stale data.
+- **`z` is context-sensitive.** On a foldable row (a thread block, a comment, a bot
+  run) it folds. Anywhere else it's the first tap of `zz` (center cursor). So
+  centering still works on code lines that happen to carry a comment.
+- **Folding a thread folds it everywhere.** Review threads fold by thread ID, so
+  collapsing one in the diff also collapses it in the overview's `Review threads`
+  section — it's one thread, not two views of one.
+- **Fold state survives refetches.** Writing a draft or hitting `R` won't reopen
+  everything you collapsed, and won't move your cursor off the row you were on.
+- **A collapsed bot run still reports its verdict**, so you don't have to expand it
+  just to learn whether CI was happy.
