@@ -55,7 +55,10 @@ func MainView(m Model) string {
 }
 
 func UpdateMain(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
-	ks := dispatchKey(msg)
+	ks, bound := m.resolveKey(msg)
+	if !bound {
+		return m, nil
+	}
 
 	// zz: two-tap vim-style center. The first z arms; a second z centers the
 	// cursor line. Any other key disarms and is handled normally.
@@ -286,7 +289,11 @@ func UpdateThreadFocus(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if ok {
 		n = len(at.Thread.Comments)
 	}
-	switch msg.Keystroke() {
+	ks, bound := m.resolveKey(msg)
+	if !bound {
+		return m, nil
+	}
+	switch ks {
 	case "j", "down":
 		if m.ThreadCursor < n-1 {
 			m.ThreadCursor++

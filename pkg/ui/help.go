@@ -10,20 +10,30 @@ import (
 
 // AllHelpEntries builds the canonical help table from keymap metadata.
 // The returned slice mirrors the registration order in keymap.Actions().
-// Call this once when the help overlay is opened rather than keeping a
-// permanent copy, because the keymap is static for a process lifetime.
-func AllHelpEntries() []HelpEntry {
+// Call this once when the help overlay is opened rather than keeping a permanent
+// copy. b is the effective binding table; pass nil to describe the shipped
+// defaults. Actions config disabled are omitted, since `?` must advertise only
+// what actually works.
+func AllHelpEntries(b *keymap.Bindings) []HelpEntry {
 	actions := keymap.Actions()
-	entries := make([]HelpEntry, len(actions))
-	for i, a := range actions {
-		keys := make([]string, len(a.Keys))
-		copy(keys, a.Keys)
-		entries[i] = HelpEntry{
+	entries := make([]HelpEntry, 0, len(actions))
+	for _, a := range actions {
+		keys := a.Keys
+		if b != nil {
+			keys = b.DisplayKeys(a.Context, a.Name)
+			if len(keys) == 0 {
+				// Disabled in config. Dropping the row entirely is the point: a help
+				// entry with no keys still reads as "this exists", which is exactly
+				// the mismatch between `?` and reality this change removes.
+				continue
+			}
+		}
+		entries = append(entries, HelpEntry{
 			Context:     a.Context,
 			Action:      a.Name,
-			Keys:        keys,
+			Keys:        append([]string(nil), keys...),
 			Description: a.Description,
-		}
+		})
 	}
 	return entries
 }
@@ -85,7 +95,7 @@ func UpdateHelp(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
 func scopedHelpEntries(m Model) []HelpEntry {
 	entries := m.HelpEntries
 	if len(entries) == 0 {
-		entries = AllHelpEntries()
+		entries = AllHelpEntries(m.Keys)
 	}
 	scoped := entries[:0:0]
 	active := string(m.CurrentFocus())

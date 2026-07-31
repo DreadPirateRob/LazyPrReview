@@ -5,7 +5,7 @@ import (
 )
 
 func TestHelpAllEntriesFromKeymap(t *testing.T) {
-	entries := AllHelpEntries()
+	entries := AllHelpEntries(nil)
 	if len(entries) == 0 {
 		t.Fatal("AllHelpEntries returned empty slice")
 	}
@@ -27,20 +27,20 @@ func TestHelpAllEntriesFromKeymap(t *testing.T) {
 
 func TestHelpAllEntriesIsolated(t *testing.T) {
 	// Mutating the returned slice or its key slices must not affect a second call.
-	a := AllHelpEntries()
-	b := AllHelpEntries()
+	a := AllHelpEntries(nil)
+	b := AllHelpEntries(nil)
 	if len(a) != len(b) {
 		t.Fatalf("repeated calls returned different lengths: %d vs %d", len(a), len(b))
 	}
 	a[0].Keys[0] = "MUTATED"
-	fresh := AllHelpEntries()
+	fresh := AllHelpEntries(nil)
 	if fresh[0].Keys[0] == "MUTATED" {
 		t.Fatal("AllHelpEntries shares key slice memory between calls")
 	}
 }
 
 func TestHelpFilterEmptyQuery(t *testing.T) {
-	entries := AllHelpEntries()
+	entries := AllHelpEntries(nil)
 	got := FilterHelpEntries(entries, "")
 	if len(got) != len(entries) {
 		t.Fatalf("empty query: expected %d entries, got %d", len(entries), len(got))
@@ -48,7 +48,7 @@ func TestHelpFilterEmptyQuery(t *testing.T) {
 }
 
 func TestHelpFilterByActionName(t *testing.T) {
-	entries := AllHelpEntries()
+	entries := AllHelpEntries(nil)
 	got := FilterHelpEntries(entries, "quit")
 	if len(got) == 0 {
 		t.Fatal("expected at least one entry matching action name 'quit'")
@@ -63,7 +63,7 @@ func TestHelpFilterByActionName(t *testing.T) {
 }
 
 func TestHelpFilterByDescription(t *testing.T) {
-	entries := AllHelpEntries()
+	entries := AllHelpEntries(nil)
 	// "hunk" appears only in main-panel descriptions.
 	got := FilterHelpEntries(entries, "hunk")
 	if len(got) == 0 {
@@ -79,7 +79,7 @@ func TestHelpFilterByDescription(t *testing.T) {
 }
 
 func TestHelpFilterByKey(t *testing.T) {
-	entries := AllHelpEntries()
+	entries := AllHelpEntries(nil)
 	// <enter> is a key on several actions.
 	got := FilterHelpEntries(entries, "<enter>")
 	if len(got) == 0 {
@@ -95,7 +95,7 @@ func TestHelpFilterByKey(t *testing.T) {
 }
 
 func TestHelpFilterCaseInsensitive(t *testing.T) {
-	entries := AllHelpEntries()
+	entries := AllHelpEntries(nil)
 	lower := FilterHelpEntries(entries, "quit")
 	upper := FilterHelpEntries(entries, "QUIT")
 	mixed := FilterHelpEntries(entries, "Quit")
@@ -109,7 +109,7 @@ func TestHelpFilterCaseInsensitive(t *testing.T) {
 }
 
 func TestHelpFilterNoMatch(t *testing.T) {
-	entries := AllHelpEntries()
+	entries := AllHelpEntries(nil)
 	got := FilterHelpEntries(entries, "xyzzy_no_such_thing")
 	if len(got) != 0 {
 		t.Fatalf("expected no results for impossible query, got %d", len(got))
@@ -117,7 +117,7 @@ func TestHelpFilterNoMatch(t *testing.T) {
 }
 
 func TestHelpFilterPreservesOrder(t *testing.T) {
-	entries := AllHelpEntries()
+	entries := AllHelpEntries(nil)
 	got := FilterHelpEntries(entries, "jump")
 	if len(got) < 2 {
 		t.Skip("need at least 2 matching entries to verify order")

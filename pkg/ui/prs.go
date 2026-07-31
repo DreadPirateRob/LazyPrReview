@@ -116,7 +116,10 @@ func VisiblePRs(m Model) []domain.PRSummary {
 
 // UpdatePRs handles keystrokes when the PR list is focused.
 func UpdatePRs(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
-	ks := msg.Keystroke()
+	ks, bound := m.resolveKey(msg)
+	if !bound {
+		return m, nil
+	}
 
 	visible := VisiblePRs(m)
 	maxIdx := len(visible) - 1

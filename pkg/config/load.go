@@ -118,6 +118,33 @@ func Validate(cfg Config) error {
 	return nil
 }
 
+// KeybindingOverrides returns the user's remaps as context → action → keys, with
+// the `string | []string` YAML shapes flattened. Validate has already rejected
+// unknown contexts/actions and duplicate keys before this runs, so a binding that
+// still fails to normalize is dropped rather than reported again — a malformed
+// entry must not take down startup.
+//
+// keymap owns the token→Bubble Tea translation; this only normalizes YAML shape.
+func KeybindingOverrides(cfg Config) map[string]map[string][]string {
+	if len(cfg.Keybinding) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string][]string, len(cfg.Keybinding))
+	for ctx, mapping := range cfg.Keybinding {
+		for action, raw := range mapping {
+			keys, err := normalizeBinding(raw)
+			if err != nil {
+				continue
+			}
+			if out[ctx] == nil {
+				out[ctx] = make(map[string][]string, len(mapping))
+			}
+			out[ctx][action] = keys
+		}
+	}
+	return out
+}
+
 func FilterMatch(mode, value, query string) bool {
 	query = strings.ToLower(query)
 	value = strings.ToLower(value)

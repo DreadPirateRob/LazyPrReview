@@ -169,7 +169,10 @@ func compactThread(at diff.AnchoredThread) string {
 }
 
 func UpdateThreads(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
-	ks := msg.Keystroke()
+	ks, bound := m.resolveKey(msg)
+	if !bound {
+		return m, nil
+	}
 	if ks == "/" {
 		m = startPanelFilter(m, &m.ThreadsPanel)
 		return m, nil

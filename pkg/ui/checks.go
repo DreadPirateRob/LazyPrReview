@@ -224,7 +224,10 @@ func renderTimelineRows(sb *strings.Builder, m Model) {
 
 // UpdateChecks handles keystrokes when the Checks panel is focused.
 func UpdateChecks(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
-	ks := msg.Keystroke()
+	ks, bound := m.resolveKey(msg)
+	if !bound {
+		return m, nil
+	}
 	switch ks {
 	case "/":
 		m = startPanelFilter(m, &m.ChecksPanel)

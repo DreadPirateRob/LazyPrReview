@@ -11,6 +11,7 @@ import (
 	"github.com/DreadPirateRob/LazyPrReview/pkg/domain"
 	"github.com/DreadPirateRob/LazyPrReview/pkg/forge"
 	"github.com/DreadPirateRob/LazyPrReview/pkg/ghcli"
+	"github.com/DreadPirateRob/LazyPrReview/pkg/ui/keymap"
 )
 
 type FocusContext string
@@ -186,6 +187,10 @@ type Model struct {
 	DeleteTarget      forge.CommentRef
 	FocusedThreadID   string
 	SpinnerFrame      int
+	// Keys is the effective binding table: shipped defaults with config.yml
+	// overrides applied. Built once in New; read by dispatch, `?` help and the
+	// hint bar so all three agree on which keys actually work.
+	Keys *keymap.Bindings
 }
 
 type toastExpiredMsg struct{}

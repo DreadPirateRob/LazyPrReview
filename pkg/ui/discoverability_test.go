@@ -45,7 +45,7 @@ func TestHintBarFitsTerminalWidth(t *testing.T) {
 
 func TestScopedHelpSurfacesAuthoringActions(t *testing.T) {
 	m := seededModel(t)
-	m.HelpEntries = AllHelpEntries()
+	m.HelpEntries = AllHelpEntries(nil)
 
 	m.FocusStack = []FocusContext{FocusMain}
 	help := helpOverlayView(m)

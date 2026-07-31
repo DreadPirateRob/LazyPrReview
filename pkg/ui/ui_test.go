@@ -292,7 +292,7 @@ func TestViewReflectsHelpAndCommandLog(t *testing.T) {
 	m.CommandLogOn = true
 	m.CommandLog = []ghcli.CommandLogEntry{{Command: []string{"gh", "pr", "list"}}}
 	m.HelpVisible = true
-	m.HelpEntries = AllHelpEntries()
+	m.HelpEntries = AllHelpEntries(nil)
 	view := fmt.Sprint(m.View())
 	if !strings.Contains(view, "Command log") || !strings.Contains(view, "gh pr list") {
 		t.Fatalf("expected command log in view, got %q", view)
@@ -312,7 +312,7 @@ func TestHelpOverlayScrollsWithCursor(t *testing.T) {
 	m := New(config.Default(), nil)
 	m.Loading = false
 	m.HelpVisible = true
-	m.HelpEntries = AllHelpEntries()
+	m.HelpEntries = AllHelpEntries(nil)
 	m.FocusStack = []FocusContext{FocusPRs, FocusHelp}
 	before := fmt.Sprint(m.View())
 	m2, _ := UpdateHelp(m, tea.KeyPressMsg{Text: "j", Code: 'j'})
@@ -329,7 +329,7 @@ func TestEscClosesHelpOverlay(t *testing.T) {
 	m := New(config.Default(), nil)
 	m.Loading = false
 	m.HelpVisible = true
-	m.HelpEntries = AllHelpEntries()
+	m.HelpEntries = AllHelpEntries(nil)
 	m.FocusStack = []FocusContext{FocusPRs, FocusHelp}
 	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	got := updated.(Model)

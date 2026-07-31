@@ -16,7 +16,7 @@ func HintBarView(m Model) string {
 		return ""
 	}
 	ctx := hintContext(m)
-	entries := hintEntries(ctx)
+	entries := hintEntries(m.Keys, ctx)
 	if len(entries) == 0 {
 		return ""
 	}
@@ -48,9 +48,26 @@ func hintContext(m Model) string {
 
 // hintEntries returns the hint entries for the given context, always prefixing
 // with the universal entries so the most common bindings are visible.
-func hintEntries(ctx string) []hintEntry {
+func hintEntries(b *keymap.Bindings, ctx string) []hintEntry {
 	all := keymap.Actions()
 	var out []hintEntry
+
+	// effectiveKey is the key the bar should advertise: the user's remap when there
+	// is one, and "" when config disabled the action — an entry with no key would
+	// still read as available, which is the mismatch this removes.
+	effectiveKey := func(a keymap.Action) string {
+		if b != nil {
+			keys := b.DisplayKeys(a.Context, a.Name)
+			if len(keys) == 0 {
+				return ""
+			}
+			return keys[0]
+		}
+		if len(a.Keys) == 0 {
+			return ""
+		}
+		return a.Keys[0]
+	}
 
 	// Per-context entries first (they are the most specific), minus a few demoted
 	// bindings. The bar has a hard width budget: when a context overflows it gets
@@ -68,10 +85,13 @@ func hintEntries(ctx string) []hintEntry {
 		"collapseAllOverview":  true,
 		"expandAllOverview":    true,
 	}
-	if ctx != "universal" {
+	if ctx != keymap.ContextUniversal {
 		for _, a := range all {
-			if a.Context == ctx && len(a.Keys) > 0 && !demoted[a.Name] {
-				out = append(out, hintEntry{key: a.Keys[0], desc: shortDesc(a.Description)})
+			if a.Context != ctx || demoted[a.Name] {
+				continue
+			}
+			if key := effectiveKey(a); key != "" {
+				out = append(out, hintEntry{key: key, desc: shortDesc(a.Description)})
 			}
 		}
 	}
@@ -80,8 +100,11 @@ func hintEntries(ctx string) []hintEntry {
 	universalShortlist := []string{"showHelp"}
 	for _, name := range universalShortlist {
 		for _, a := range all {
-			if a.Context == "universal" && a.Name == name && len(a.Keys) > 0 {
-				out = append(out, hintEntry{key: a.Keys[0], desc: shortDesc(a.Description)})
+			if a.Context != keymap.ContextUniversal || a.Name != name {
+				continue
+			}
+			if key := effectiveKey(a); key != "" {
+				out = append(out, hintEntry{key: key, desc: shortDesc(a.Description)})
 			}
 		}
 	}

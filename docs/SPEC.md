@@ -201,6 +201,16 @@ stateDiagram-v2
 
 Every action name is remappable under `keybinding.universal` / `keybinding.<context>` in config. Contexts: `universal, prs, files, threads, thread, checks, main, status`. Uses the same `<c-x>` / `<disabled>` syntax family as lazygit.
 
+**How a remap reaches the handler.** Config and the action table speak bracketed tokens (`<enter>`, `<c-c>`); key handlers compare what Bubble Tea reports (`enter`, `ctrl+c`). Bindings cross that boundary exactly once, in `keymap.TeaKey`. A press is then translated to the *shipped default* key of whichever action currently owns it, so handlers keep switching on the literals they were written with. Three consequences worth knowing:
+
+- **Remapping an action moves its defaults with it.** Bind `cursorDown` to `x` and `j`/`<down>` stop scrolling — they were that action's keys, and leaving them live would make the setting a suggestion.
+- **The narrower declaration wins.** Several keys are declared twice at two granularities (universal `togglePrimary` and files `toggleViewed` both claim `<space>`; universal `open` and files `openDiff` both claim `<enter>`). The context declaration is authoritative, so disabling the context action kills the key there even though the universal alias still nominally holds it.
+- **Modal surfaces are exempt.** The composer, menus, `?` help, the filter input and the command log sit outside the keymap contract and match keys literally; a remap never reinterprets their controls.
+
+`ctrl+c` always quits, including when `quit` is disabled — a config must not be able to lock the user in. `centerCursor` (`zz`) is the one non-remappable binding: `ValidateKey` accepts a single rune or a bracketed name, so a two-key sequence cannot be expressed in config. Remapping the single-key `z` fold action does not break `zz`.
+
+`?` help and the hint bar read the same effective table as dispatch, so a remapped key is advertised in its new form and a disabled action disappears from both entirely.
+
 ### Main-view rebinds (callout)
 
 In Main diff, `h`/`l` are rebound from "prev/next panel" to **prev/next hunk**; `[`/`]` are rebound from "prev/next tab" to **prev/next file**. Panel cycling from Main always uses `tab`/`backtab`. These rebinds are necessary because there are no tabs in Main and hunk/file navigation is the primary spatial motion.

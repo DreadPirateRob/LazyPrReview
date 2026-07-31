@@ -90,7 +90,11 @@ func StatusView(m Model) string {
 
 // UpdateStatus handles keystrokes when the Status panel is focused.
 func UpdateStatus(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
-	switch msg.Keystroke() {
+	ks, bound := m.resolveKey(msg)
+	if !bound {
+		return m, nil
+	}
+	switch ks {
 	case "j", "down":
 		m.Status.Cursor++
 	case "k", "up":

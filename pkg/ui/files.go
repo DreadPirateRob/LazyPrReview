@@ -114,7 +114,11 @@ func UpdateFiles(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.PRDetail == nil {
 		return m, nil
 	}
-	switch msg.Keystroke() {
+	ks, bound := m.resolveKey(msg)
+	if !bound {
+		return m, nil
+	}
+	switch ks {
 	case "`":
 		// Preserve the selected file's position across a tree<->flat mode change:
 		// remember the FileIndex at the cursor (or -1 for a dir), flip the mode,
@@ -158,7 +162,7 @@ func UpdateFiles(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if len(rows) == 0 {
 		return m, nil
 	}
-	switch msg.Keystroke() {
+	switch ks {
 	case "j", "down":
 		if m.FilesPanel.Cursor < len(rows)-1 {
 			m.FilesPanel.Cursor++

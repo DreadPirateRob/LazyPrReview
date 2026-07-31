@@ -57,7 +57,7 @@ func TestHelpFloatsOverLiveUI(t *testing.T) {
 	plain := fullView(m)
 
 	m.HelpVisible = true
-	m.HelpEntries = AllHelpEntries()
+	m.HelpEntries = AllHelpEntries(nil)
 	m.FocusStack = []FocusContext{FocusPRs, FocusHelp}
 	view := fullView(m)
 

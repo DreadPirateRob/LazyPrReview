@@ -10,6 +10,7 @@ import (
 	"github.com/DreadPirateRob/LazyPrReview/pkg/config"
 	"github.com/DreadPirateRob/LazyPrReview/pkg/forge"
 	"github.com/DreadPirateRob/LazyPrReview/pkg/ghcli"
+	"github.com/DreadPirateRob/LazyPrReview/pkg/ui/keymap"
 )
 
 // screenModeOrder defines the +/_ cycle direction.
@@ -26,11 +27,15 @@ func New(cfg config.Config, f forge.Forge) Model {
 		sm = ScreenNormal
 	}
 	return Model{
-		Config:      cfg,
-		Forge:       f,
-		FocusStack:  []FocusContext{FocusPRs},
-		ScreenMode:  sm,
-		Loading:     true,
+		Config:     cfg,
+		Forge:      f,
+		FocusStack: []FocusContext{FocusPRs},
+		ScreenMode: sm,
+		Loading:    true,
+		// Resolve the effective key table once at startup. Config remaps used to
+		// load and validate and then be ignored, because every handler switched on
+		// hardcoded literals; this is the single place they enter the dispatch path.
+		Keys:        keymap.Resolve(config.KeybindingOverrides(cfg)),
 		PRCache:     map[forge.PRFilter]prCacheEntry{},
 		SearchCache: map[string]prCacheEntry{},
 	}
@@ -474,16 +479,86 @@ func dispatchKey(msg tea.KeyPressMsg) string {
 	return ks
 }
 
+// resolveKey turns a keypress into the key the handlers switch on, applying the
+// user's remaps for the active context. hintContext already maps focus onto the
+// keymap context name, and dispatch must agree with what the hint bar advertises,
+// so it is reused rather than duplicated.
+//
+// Modal focuses (help, menus, composer, command log) report "universal" from
+// hintContext; they sit outside the keymap contract and match keys literally, so
+// resolution is skipped entirely rather than letting a remap reinterpret them.
+//
+// ok=false means the press must be dropped: it is a shipped default whose action
+// config moved or disabled. Handlers MUST honour that rather than falling through,
+// or the old binding keeps working and the remap is a lie.
+func (m Model) resolveKey(msg tea.KeyPressMsg) (string, bool) {
+	raw := dispatchKey(msg)
+	ctx := hintContext(m)
+	if ctx == keymap.ContextUniversal {
+		return raw, true
+	}
+	return m.Keys.Canonical(ctx, raw)
+}
+
+// cycleSidePanel moves focus to the next or previous side panel, wrapping. Main is
+// not in the ring — `0` jumps there directly — matching lazygit, where tab cycles
+// the side panels only. Focus arriving at a browser panel follows its selection
+// into Main exactly as the numbered keys do.
+func cycleSidePanel(m Model, delta int) Model {
+	ring := [...]FocusContext{FocusStatus, FocusPRs, FocusFiles, FocusThreads, FocusChecks}
+	at := -1
+	for i, f := range ring {
+		if f == m.CurrentFocus() {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		// Focus is outside the ring (Main, or a modal that pushed over it). Enter at
+		// the first panel going forward and the last going backward; arithmetic on a
+		// sentinel index would land two short of the end.
+		if delta < 0 {
+			return enterSidePanel(m, ring[len(ring)-1])
+		}
+		return enterSidePanel(m, ring[0])
+	}
+	return enterSidePanel(m, ring[((at+delta)%len(ring)+len(ring))%len(ring)])
+}
+
+// enterSidePanel focuses a panel and runs the same cursor-follow the numbered keys
+// do, so arriving by tab and by number leave Main in the same state.
+func enterSidePanel(m Model, next FocusContext) Model {
+	m = m.PushFocus(next)
+	switch next {
+	case FocusPRs:
+		return followPRSelection(m)
+	case FocusFiles:
+		return followFilesSelection(m)
+	case FocusThreads:
+		return followThreadsSelection(m)
+	}
+	return m
+}
+
 // handleKey routes key events based on the active focus context.
 //
-// Fatal and loading states are locked: only q / ctrl+c reach the program exit.
-// All other contexts receive universal bindings; per-panel overrides are wired
-// in step 7.
+// Fatal and loading states are locked: only ctrl+c and whatever currently binds
+// `quit` reach the program exit. Every keymapped context resolves its keys through
+// the effective binding table first; modal surfaces match keys literally.
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	ks := dispatchKey(msg)
+	// raw is the pressed key before remapping. The guards below need it literal:
+	// the filter input must receive typed characters, and the composer owns its own
+	// keys entirely.
+	raw := dispatchKey(msg)
 
 	if m.CurrentFocus() == FocusFatal || m.Loading {
-		if ks == "q" || ks == "ctrl+c" {
+		if raw == "ctrl+c" {
+			return m, tea.Quit
+		}
+		// Resolve `quit` by ACTION so a remapped or disabled binding behaves here
+		// exactly as `?` advertises it. Keying off a literal "q" would make these
+		// two screens the one place the user's config silently does not apply.
+		if action, _, ok := m.Keys.Owner(keymap.ContextUniversal, raw); ok && action == "quit" {
 			return m, tea.Quit
 		}
 		return m, nil
@@ -493,17 +568,53 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// fire — typing "q" would quit and digits would switch panels. Only the
 	// safety quit stays global; every other key feeds the filter.
 	if m.FilterActive {
-		if ks == "ctrl+c" {
+		if raw == "ctrl+c" {
 			return m, tea.Quit
 		}
-		return handleFilterInput(m, ks)
+		return handleFilterInput(m, raw)
 	}
 
 	if m.CurrentFocus() == FocusCompose {
-		if ks == "ctrl+c" {
+		if raw == "ctrl+c" {
 			return m, tea.Quit
 		}
 		return updateCompose(m, msg)
+	}
+
+	// ctrl+c is an unconditional escape hatch. `quit` is remappable and can be
+	// disabled outright, so without this a config could lock the user in.
+	if raw == "ctrl+c" {
+		return m, tea.Quit
+	}
+
+	// Modal surfaces — help, menus, the composer, the command log — sit outside the
+	// keymap contract and match their keys literally. hintContext reports
+	// "universal" for exactly those focuses, so neither remapping nor panel cycling
+	// may run there: a remapped or disabled binding must never reinterpret a menu's
+	// own controls.
+	ks := raw
+	if ctx := hintContext(m); ctx != keymap.ContextUniversal {
+		// prevPanel/nextPanel are universal, but their default keys (h/l, arrows,
+		// tab) are ALSO Main's hunk keys — so claim them by ACTION, not by key. A
+		// universal `case "h"` would steal prevHunk from the diff. Resolved before
+		// the section-loading gate because focus switches stay live during a fetch.
+		if action, scope, ok := m.Keys.Owner(ctx, raw); ok && scope == keymap.ContextUniversal {
+			switch action {
+			case "prevPanel":
+				return cycleSidePanel(m, -1), nil
+			case "nextPanel":
+				return cycleSidePanel(m, 1), nil
+			}
+		}
+
+		resolved, bound := m.Keys.Canonical(ctx, raw)
+		if !bound {
+			// A shipped default whose action config moved or disabled. Swallowing it
+			// is the whole point: otherwise the old key keeps working alongside the
+			// new one and the remap is a lie.
+			return m, nil
+		}
+		ks = resolved
 	}
 
 	switch ks {
@@ -566,7 +677,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		} else {
 			m.HelpVisible = true
-			m.HelpEntries = AllHelpEntries()
+			m.HelpEntries = AllHelpEntries(m.Keys)
 			m.HelpCursor = 0
 			m = m.PushFocus(FocusHelp)
 		}
