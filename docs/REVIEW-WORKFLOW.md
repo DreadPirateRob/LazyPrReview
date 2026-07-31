@@ -174,9 +174,13 @@ In Main (`0` or `enter` from Files):
 
 ### Side by side
 
-`\|` swaps the unified diff for old-on-the-left, new-on-the-right. Context lines show
-on both sides so your eye can track across; a modified line sits opposite the line it
-replaced, and where one side has more lines than the other you get blank filler.
+`\|` swaps the unified diff for old-on-the-left, new-on-the-right — from Main **or
+straight from the Files panel**. Context lines show on both sides so your eye can
+track across; a modified line sits opposite the line it replaced, and where one side
+has more lines than the other you get blank filler.
+
+It works on **everything the Main pane can show**: a single file, a whole directory
+(cursor on a directory row), and a commit diff from the `[4]` Commits tab.
 
 **It stays on until you turn it off.** Moving between files, bouncing focus to the
 Files panel and back, `[` / `]` — all of it keeps side-by-side. It's your reading
@@ -189,12 +193,25 @@ back in side-by-side.
 
 It is deliberately **read-only** — the same footing as a commit-scoped diff. While
 it's showing, `c`, `v`, `space` and `enter` on a thread do nothing, and comment
-threads aren't drawn inline. The unified view gives all of that back.
+threads aren't drawn inline. The unified single-file view gives all of that back.
 
 Two columns need room. Below 80 columns of Main you get unified instead — on an
 explicit `\|` it tells you why; `+` widens Main and usually fixes it. It's also
 unavailable when `gui.diffPager` is set, since the external pager renders its own
 layout.
+
+### Fold files in directory and commit views
+
+A multi-file view gives every file a caret header — `▾ path  +N/-N`. On a header:
+
+| Key | Does |
+|---|---|
+| `z` | Fold / unfold that file |
+| `-` / `=` | Collapse / expand **all** files in the view |
+
+Collapse everything, then open files one at a time as you work through them — the
+same rhythm as the tree in `[3]`. Fold state survives toggling side-by-side, and
+`j`/`k` skip the blank rows between files so the cursor always lands on something.
 
 ### Comments appear in the diff
 

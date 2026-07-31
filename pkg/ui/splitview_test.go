@@ -53,8 +53,8 @@ func TestSplitToggleRoundTripsToUnified(t *testing.T) {
 	file := m.DiffFiles[m.MainFileIndex].Path
 
 	split, _ := UpdateMain(m, tea.KeyPressMsg{Text: "|", Code: '|'})
-	if split.MainSplitPath != file {
-		t.Fatalf("split view should record its file, got %q want %q", split.MainSplitPath, file)
+	if split.DiffFiles[split.MainDiff.FileIndex].Path != file {
+		t.Fatalf("split view should record its file, got %q want %q", split.DiffFiles[split.MainDiff.FileIndex].Path, file)
 	}
 	if split.MainFileIndex != -1 {
 		t.Fatalf("split view is read-only and must drop the file anchor, got %d", split.MainFileIndex)
@@ -64,8 +64,8 @@ func TestSplitToggleRoundTripsToUnified(t *testing.T) {
 	}
 
 	back, _ := UpdateMain(split, tea.KeyPressMsg{Text: "|", Code: '|'})
-	if back.MainSplitPath != "" {
-		t.Fatalf("leaving split must clear the recorded file, got %q", back.MainSplitPath)
+	if back.MainDiff.Split {
+		t.Fatalf("leaving split must clear the recorded file, got %q", back.DiffFiles[back.MainDiff.FileIndex].Path)
 	}
 	if back.MainFileIndex != m.MainFileIndex {
 		t.Fatalf("leaving split must restore the file anchor, got %d want %d", back.MainFileIndex, m.MainFileIndex)
@@ -116,7 +116,7 @@ func TestSplitRefusedWhenTooNarrow(t *testing.T) {
 	}
 
 	got, _ := UpdateMain(m, tea.KeyPressMsg{Text: "|", Code: '|'})
-	if got.MainSplitPath != "" {
+	if got.MainDiff.Split {
 		t.Fatal("split must be refused when the pane cannot host two columns")
 	}
 	if got.Toast.Message != ToastSplitTooNarrow {
@@ -129,7 +129,7 @@ func TestSplitRefusedWithExternalPager(t *testing.T) {
 	m.Config.GUI.DiffPager = "delta --paging=never"
 
 	got, _ := UpdateMain(m, tea.KeyPressMsg{Text: "|", Code: '|'})
-	if got.MainSplitPath != "" {
+	if got.MainDiff.Split {
 		t.Fatal("an external pager owns its own layout; split must be refused")
 	}
 	if got.Toast.Message != ToastSplitUnavailablePager {
@@ -168,7 +168,7 @@ func TestSplitRowsShareOneDividerColumn(t *testing.T) {
 func TestSplitSurvivesFilesPanelFollow(t *testing.T) {
 	m := splitModel(t)
 	split, _ := UpdateMain(m, tea.KeyPressMsg{Text: "|", Code: '|'})
-	if split.MainSplitPath == "" {
+	if !split.MainDiff.Split {
 		t.Fatal("precondition: should be in side-by-side")
 	}
 	splitLines := strings.Join(split.MainLines, "\n")
@@ -178,7 +178,7 @@ func TestSplitSurvivesFilesPanelFollow(t *testing.T) {
 	if !followed.DiffSplit {
 		t.Fatal("the side-by-side preference must survive a focus change")
 	}
-	if followed.MainSplitPath == "" {
+	if !followed.MainDiff.Split {
 		t.Fatal("following the Files cursor must keep rendering side-by-side")
 	}
 	if strings.Join(followed.MainLines, "\n") != splitLines {
@@ -186,11 +186,11 @@ func TestSplitSurvivesFilesPanelFollow(t *testing.T) {
 	}
 }
 
-// Same for moving between files: the mode belongs to the reader, not the file.
-func TestSplitSurvivesFileSwitch(t *testing.T) {
+// twoFileSplitModel extends splitModel with a second diff file. diffModel's fixture
+// is a single file, and carrying the mode across files needs two.
+func twoFileSplitModel(t *testing.T) Model {
+	t.Helper()
 	m := splitModel(t)
-	// diffModel's fixture is a single file, so extend it — this is about carrying the
-	// mode ACROSS files, which one file cannot exercise.
 	files, err := diff.Parse(anchorSampleDiff + "\ndiff --git a/second.go b/second.go\n--- a/second.go\n+++ b/second.go\n@@ -1 +1 @@\n-was\n+now\n")
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -200,23 +200,77 @@ func TestSplitSurvivesFileSwitch(t *testing.T) {
 	}
 	m.DiffFiles = files
 	m.MainFileIndex = 0
-	m = setMainDiff(m, 0)
+	return setMainDiff(m, 0)
+}
 
+// Same for moving between files: the mode belongs to the reader, not the file.
+func TestSplitSurvivesFileSwitch(t *testing.T) {
+	m := twoFileSplitModel(t)
 	split, _ := UpdateMain(m, tea.KeyPressMsg{Text: "|", Code: '|'})
-	first := split.MainSplitPath
+	first := split.DiffFiles[split.MainDiff.FileIndex].Path
 	if first == "" {
 		t.Fatal("precondition: should be in side-by-side")
 	}
 
 	next := setMainFile(split, 1)
-	if next.MainSplitPath == "" {
+	if !next.MainDiff.Split {
 		t.Fatal("switching files must keep side-by-side")
 	}
-	if next.MainSplitPath == first {
-		t.Fatalf("switching files should show the new file, still on %q", first)
+	if next.DiffFiles[next.MainDiff.FileIndex].Path != m.DiffFiles[1].Path {
+		t.Fatalf("should be showing %q, got %q", m.DiffFiles[1].Path, next.DiffFiles[next.MainDiff.FileIndex].Path)
 	}
-	if next.MainSplitPath != files[1].Path {
-		t.Fatalf("should be showing %q, got %q", files[1].Path, next.MainSplitPath)
+}
+
+// The regression that slipped: `[`/`]` gated on MainFileIndex, which is -1 in split
+// mode — `[` was dead and `]` jumped to file 0. This drives the actual KEYS through
+// UpdateMain; TestSplitSurvivesFileSwitch calls the helper directly and would keep
+// passing if the keypath regressed again.
+func TestFileNavKeysWorkInSplit(t *testing.T) {
+	m := twoFileSplitModel(t)
+	split, _ := UpdateMain(m, tea.KeyPressMsg{Text: "|", Code: '|'})
+	if !split.MainDiff.Split || split.MainDiff.FileIndex != 0 {
+		t.Fatalf("precondition: split on file 0, got split=%v idx=%d", split.MainDiff.Split, split.MainDiff.FileIndex)
+	}
+
+	fwd, _ := UpdateMain(split, tea.KeyPressMsg{Text: "]", Code: ']'})
+	if fwd.MainDiff.FileIndex != 1 {
+		t.Fatalf("] should advance to file 1, got %d", fwd.MainDiff.FileIndex)
+	}
+	if !fwd.MainDiff.Split {
+		t.Fatal("] must keep side-by-side")
+	}
+
+	back, _ := UpdateMain(fwd, tea.KeyPressMsg{Text: "[", Code: '['})
+	if back.MainDiff.FileIndex != 0 {
+		t.Fatalf("[ should return to file 0, got %d", back.MainDiff.FileIndex)
+	}
+	if !back.MainDiff.Split {
+		t.Fatal("[ must keep side-by-side")
+	}
+
+	// At the first file, [ is a no-op — not a wrap, and never a jump to a bogus index.
+	still, _ := UpdateMain(back, tea.KeyPressMsg{Text: "[", Code: '['})
+	if still.MainDiff.FileIndex != 0 || !still.MainDiff.Split {
+		t.Fatalf("[ at the first file must stay put, got idx=%d split=%v", still.MainDiff.FileIndex, still.MainDiff.Split)
+	}
+}
+
+// In a directory or commit view "next file" has no meaning — and with the old
+// MainFileIndex gate, `]` there jumped to file 0. It must be inert.
+func TestFileNavKeysInertInMultiFileViews(t *testing.T) {
+	m := twoFileSplitModel(t)
+	m = renderCommitInMain(m, "abc123def", "test commit", m.DiffFiles)
+	if m.MainDiff.Kind != mainDiffCommit {
+		t.Fatalf("precondition: commit view, got kind %d", m.MainDiff.Kind)
+	}
+	beforeLines := strings.Join(m.MainLines, "\n")
+
+	got, _ := UpdateMain(m, tea.KeyPressMsg{Text: "]", Code: ']'})
+	if got.MainDiff.Kind != mainDiffCommit {
+		t.Fatalf("] in a commit view must stay a commit view, got kind %d", got.MainDiff.Kind)
+	}
+	if strings.Join(got.MainLines, "\n") != beforeLines {
+		t.Fatal("] in a commit view must be inert, but the content changed")
 	}
 }
 
@@ -230,7 +284,7 @@ func TestUnifiedSurvivesAfterToggleOff(t *testing.T) {
 	}
 
 	followed := followFilesSelection(back.PushFocus(FocusFiles))
-	if followed.MainSplitPath != "" {
+	if followed.MainDiff.Split {
 		t.Fatal("with the preference off, following must render unified")
 	}
 }
@@ -250,7 +304,7 @@ func TestThreadJumpRendersUnifiedWithoutClearingPreference(t *testing.T) {
 	split, _ := UpdateMain(m, tea.KeyPressMsg{Text: "|", Code: '|'})
 
 	jumped := showThreadInMain(split, m.AnchoredThreads[0])
-	if jumped.MainSplitPath != "" {
+	if jumped.MainDiff.Split {
 		t.Fatal("a thread jump must render unified — threads are not drawn side-by-side")
 	}
 	if !jumped.DiffSplit {

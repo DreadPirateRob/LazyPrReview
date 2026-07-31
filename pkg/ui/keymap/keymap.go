@@ -74,6 +74,7 @@ var actions = []Action{
 	{"expandAllOverview", "main", "Expand all", []string{"="}},
 	{"toggleAuthorBot", "main", "Bot?", []string{"b"}},
 	{"toggleSplitDiff", "main", "Split", []string{"|"}},
+	{"toggleSplitDiff", "files", "Split", []string{"|"}},
 	{"editConfig", "status", "Edit config", []string{"e"}},
 	// Authoring (Phase 2). Registered per real context so `?` help and the
 	// hint bar surface them where they actually work.

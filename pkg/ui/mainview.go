@@ -18,12 +18,10 @@ import (
 func setMainLines(m Model, lines []string) Model {
 	m.MainLines = lines
 	m.MainGen++
-	// Any new Main content leaves the directory and side-by-side views and drops the
-	// row model; showDirInMain, toggleSplitView and setMainDiff re-set theirs
-	// immediately after their own call, so those are the only places that opt back in.
-	m.MainDirPath = ""
-	m.MainDirFilter = ""
-	m.MainSplitPath = ""
+	// Any new Main content drops the row model and the diff-source descriptor; the
+	// diff builders re-set theirs immediately after their own call, so those are the
+	// only places that opt back in.
+	m.MainDiff = mainDiffSource{}
 	m.MainRows = nil
 	return m
 }
@@ -83,8 +81,22 @@ func UpdateMain(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 			return toggleThreadFold(m, key), nil
 		}
+		// In a multi-file view, z folds/unfolds the file whose header the cursor sits on.
+		if m.MainDiff.Kind == mainDiffDir || m.MainDiff.Kind == mainDiffCommit {
+			if r, ok := rowAt(m, m.MainCursor); ok && r.Kind == rowFileHeader && r.Key != "" {
+				path := strings.TrimPrefix(r.Key, "file:")
+				return toggleFileFold(m, path), nil
+			}
+		}
 		m.MainPendingZ = true
 		return m, nil
+	}
+
+	// Collapse / expand every file in a multi-file diff view. Distinct from the
+	// overview fold-all below: multi-file views are MainDiff kind dir/commit, not
+	// MainOverview.
+	if (m.MainDiff.Kind == mainDiffDir || m.MainDiff.Kind == mainDiffCommit) && (ks == "-" || ks == "=") {
+		return setAllFileFolds(m, ks == "-"), nil
 	}
 
 	// Collapse / expand every foldable overview row. Same keys and meaning as the
@@ -106,14 +118,10 @@ func UpdateMain(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	switch ks {
 	case "j", "down":
-		if m.MainCursor < len(m.MainLines)-1 {
-			m.MainCursor++
-		}
+		m.MainCursor = stepMainCursor(m, 1)
 		m = followMainCursor(m)
 	case "k", "up":
-		if m.MainCursor > 0 {
-			m.MainCursor--
-		}
+		m.MainCursor = stepMainCursor(m, -1)
 		m = followMainCursor(m)
 	case "J", "ctrl+d":
 		m = scrollMain(m, mainHalfPage(m))
@@ -131,14 +139,21 @@ func UpdateMain(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.MainCursor = len(m.MainLines) - 1
 		}
 		m = followMainCursor(m)
-	case "[":
-		if m.MainFileIndex > 0 {
-			m = setMainFile(m, m.MainFileIndex-1)
-			m = followMainCursor(m)
+	case "[", "]":
+		// Gate on the DESCRIPTOR, not MainFileIndex. MainFileIndex is -1 in every
+		// read-only view (side-by-side, directory, commit), where `[` was dead and `]`
+		// evaluated -1 < len-1 and jumped to file 0 instead of the next file. The
+		// descriptor carries the real index in both modes, and Kind pins this to
+		// single-file views, where "next file" is the only place it means anything.
+		if m.MainDiff.Kind != mainDiffFile {
+			return m, nil
 		}
-	case "]":
-		if m.MainFileIndex < len(m.DiffFiles)-1 {
-			m = setMainFile(m, m.MainFileIndex+1)
+		next := m.MainDiff.FileIndex - 1
+		if ks == "]" {
+			next = m.MainDiff.FileIndex + 1
+		}
+		if next >= 0 && next < len(m.DiffFiles) {
+			m = setMainFile(m, next)
 			m = followMainCursor(m)
 		}
 	case "space":

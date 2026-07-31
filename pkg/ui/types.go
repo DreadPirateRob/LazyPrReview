@@ -134,28 +134,23 @@ type Model struct {
 	// lowercased login. Loaded at startup and rewritten whenever the user flags an
 	// author, so the built-in bot list is only a default. Copy-on-write, since a
 	// Model is passed by value everywhere.
-	AuthorRoles   map[string]config.AuthorRole
-	MainMode      MainMode
+	AuthorRoles map[string]config.AuthorRole
+	MainMode    MainMode
+	// MainFileIndex is the DiffFiles index when Main shows a LINE-ADDRESSABLE single
+	// file, and -1 for every read-only view (side-by-side, directory aggregate,
+	// commit). It is the contract anchorAt and refreshMainDiff gate on, so it answers
+	// "can this content take line comments" — not "what is on screen".
 	MainFileIndex int
-	// MainDirPath names the directory whose aggregate diff Main is showing, or ""
-	// for any other content; MainDirFilter records the Files filter it was built
-	// under, since the subtree is restricted to the visible set. Both pair with
-	// MainFileIndex = -1, since a directory view is not a single-PR-file view, and
-	// both are cleared by setMainLines so every other Main-content path drops them
-	// without having to remember to.
-	MainDirPath   string
-	MainDirFilter string
-	// MainSplitPath names the file whose side-by-side diff Main is showing, or ""
-	// for any other content. Like MainDirPath it pairs with MainFileIndex = -1 —
-	// the side-by-side view is read-only, so it is not a line-addressable PR file —
-	// and is cleared by setMainLines so every other Main-content path drops it.
-	MainSplitPath string
-	// DiffSplit is the sticky side-by-side preference. Unlike MainSplitPath, which
-	// records what Main happens to be showing and is cleared on every content
-	// change, this survives focus changes, file switches and the Files panel
-	// following its cursor: once you ask for side-by-side you keep it until you
-	// toggle it off. Thread jumps are the one exception — threads are not rendered
-	// side-by-side, so those land in the unified diff without disturbing it.
+	// MainDiff answers the second question: what content is on screen and how to
+	// redraw it. See mainDiffSource. Cleared by setMainLines; each builder re-sets it
+	// immediately after.
+	MainDiff mainDiffSource
+	// DiffSplit is the sticky side-by-side preference. Unlike MainDiff, which records
+	// what Main happens to be showing and is cleared on every content change, this
+	// survives focus changes, file switches and the Files panel following its cursor:
+	// once you ask for side-by-side you keep it until you toggle it off. Thread jumps
+	// are the one exception — threads are not rendered side-by-side, so those land in
+	// the unified diff without disturbing it.
 	DiffSplit         bool
 	MainCursor        int
 	MainScroll        int

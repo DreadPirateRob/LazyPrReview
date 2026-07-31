@@ -38,7 +38,7 @@ const (
 	ToastDeleteFailed             = "Delete failed"
 	ToastCannotReply              = "You can't reply to this thread"
 	ToastReplyFailed              = "Reply failed"
-	ToastSplitNeedsFile           = "Side-by-side needs a single file diff"
+	ToastSplitNeedsDiff           = "Side-by-side needs a diff on screen"
 	ToastSplitTooNarrow           = "Too narrow for side-by-side — try + for fullscreen"
 	ToastSplitUnavailablePager    = "Side-by-side is unavailable with an external diff pager"
 )

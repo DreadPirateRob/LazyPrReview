@@ -363,8 +363,8 @@ func TestFollowFilesSelectionShowsDirDiff(t *testing.T) {
 		t.Fatalf("expected a Directory: header, got %v", got.MainLines)
 	}
 	dir := visibleFileRows(m)[dirPos].Path
-	if got.MainDirPath != dir {
-		t.Fatalf("MainDirPath = %q, want %q", got.MainDirPath, dir)
+	if got.MainDiff.DirPath != dir {
+		t.Fatalf("MainDirPath = %q, want %q", got.MainDiff.DirPath, dir)
 	}
 	// A concatenated view has no 1:1 line mapping, so it must not masquerade as a
 	// single PR file — that sentinel is what disables line comments and anchors.
@@ -422,8 +422,8 @@ func TestDirThenFileRestoresFileView(t *testing.T) {
 	m.FilesPanel.Cursor = filePos
 	got := followFilesSelection(m)
 
-	if got.MainDirPath != "" {
-		t.Fatalf("moving to a file must clear MainDirPath, got %q", got.MainDirPath)
+	if got.MainDiff.Kind == mainDiffDir {
+		t.Fatalf("moving to a file must clear MainDirPath, got %q", got.MainDiff.DirPath)
 	}
 	if got.MainFileIndex < 0 {
 		t.Fatal("moving to a file must restore a real MainFileIndex (line anchors)")
@@ -441,7 +441,7 @@ func TestDirFollowRerendersWhenFilterChanges(t *testing.T) {
 	}
 	m.FilesPanel.Cursor = dirPos
 	m = followFilesSelection(m)
-	dir := m.MainDirPath
+	dir := m.MainDiff.DirPath
 	wide := strings.Join(m.MainLines, "\n")
 	m.MainCursor, m.MainScroll = 9, 5
 

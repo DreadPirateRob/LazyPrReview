@@ -299,6 +299,9 @@ func showThreadInMain(m Model, at diff.AnchoredThread) Model {
 			continue
 		}
 		m.MainFileIndex = i
+		// setMainDiff records the source itself, unified: a thread has no side-by-side
+		// representation, so this render stays unified even when the preference is on,
+		// and `|` can put side-by-side back from here.
 		m = setMainDiff(m, i)
 		m.MainMode = MainDiff
 		// Land on the thread's own summary row when it is rendered inline, so the

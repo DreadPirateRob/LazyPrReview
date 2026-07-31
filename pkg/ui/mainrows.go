@@ -229,20 +229,28 @@ func mainLineForRenderIndex(m Model, renderIndex int) int {
 	return -1
 }
 
-// setMainDiff points Main at one file's diff and owns the row model for it.
+// setMainDiff renders one PR file's unified diff into Main, owns the row model for
+// it, and records it as the diff source.
 //
-// With an external pager configured the output is opaque text with no line
-// mapping, so rows stay nil and every line-scoped action remains inert — the
-// same degradation line comments already take.
+// Setting the descriptor HERE rather than in each caller is deliberate: separate
+// callers re-stamping it by hand is exactly how the old per-kind fields drifted, and
+// a Main with content but no identity cannot be re-rendered by `|` or a fold.
+//
+// With an external pager configured the output is opaque text with no line mapping,
+// so rows stay nil and every line-scoped action remains inert.
 func setMainDiff(m Model, idx int) Model {
 	if m.Config.GUI.DiffPager != "" {
 		if lines := renderDiffFileExternal(m, idx); lines != nil {
-			return setMainLines(m, lines)
+			m = setMainLines(m, lines)
+			m.MainDiff = mainDiffSource{Kind: mainDiffFile, FileIndex: idx}
+			return m
 		}
 	}
 	lines, rows := buildDiffRows(m, idx, mainContentWidth(m))
 	m = setMainLines(m, lines)
 	m.MainRows = rows // after setMainLines, which clears it
+	// Always unified: buildDiffRows is the single-file unified builder.
+	m.MainDiff = mainDiffSource{Kind: mainDiffFile, FileIndex: idx}
 	return m
 }
 

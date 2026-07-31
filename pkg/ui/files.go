@@ -157,6 +157,8 @@ func UpdateFiles(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.FilesCollapsed = nil
 		m.FilesPanel.Cursor = clampCursor(m.FilesPanel.Cursor, len(visibleFileRows(m)))
 		return m, nil
+	case "|":
+		return toggleSplitView(m)
 	}
 	rows := visibleFileRows(m)
 	if len(rows) == 0 {
@@ -374,7 +376,8 @@ func showFileInMain(m Model, idx int) (Model, bool) {
 	// Already showing this file? Both representations count: the unified view records
 	// the index, the side-by-side view the path. Without the second check the Files
 	// panel would rebuild the same split view on every cursor bounce.
-	if m.MainMode == MainDiff && (m.MainFileIndex == diffIdx || m.MainSplitPath == m.DiffFiles[diffIdx].Path) {
+	if m.MainMode == MainDiff && m.MainDiff.Kind == mainDiffFile &&
+		m.MainDiff.FileIndex == diffIdx && m.MainDiff.Split == wantSplit(m) {
 		return m, true
 	}
 	m.MainCursor = 0
@@ -431,34 +434,95 @@ func filesUnderDir(m Model, dirPath string) []int {
 
 // renderDirDiff concatenates the diffs of every file beneath dirPath into one
 // scrollable view. Files with no parsed diff (binaries, renames without content)
-// are skipped; nil means there was nothing to show.
+// are skipped; nil, nil means there was nothing to show.
 //
-// Line-scoped actions are deliberately dead in this view — the caller pairs it
-// with MainFileIndex = -1. The built-in renderer's single-file contract
-// (lines[1+i] maps 1:1 to file.Rendered[i]) cannot survive concatenation, and
-// thread anchoring plus line comments are built on it.
-func renderDirDiff(m Model, dirPath string, indices []int) []string {
-	body := make([]string, 0, 64)
+// Per-file blocks honour fold state (appendFileBlock) and the side-by-side
+// preference (wantSplit). Every body row carries RenderIndex = -1 — the 1:1
+// line↔Rendered invariant that enables thread anchors holds only for a single-file
+// unified diff, and concatenation breaks it.
+func renderDirDiff(m Model, dirPath string, indices []int) ([]string, []mainRow) {
+	body := make([]string, 0, 128)
+	bodyRows := make([]mainRow, 0, 128)
+	add := func(s string, r mainRow) {
+		body = append(body, s)
+		bodyRows = append(bodyRows, r)
+	}
 	shown := 0
+	width := mainContentWidth(m)
 	for _, idx := range indices {
 		diffIdx := findDiffFileIndexByPath(m.DiffFiles, m.PRDetail.Files[idx].Path)
 		if diffIdx < 0 {
 			continue
 		}
 		if shown > 0 {
-			body = append(body, "")
+			add("", mainRow{Kind: rowMeta, RenderIndex: -1})
 		}
-		body = append(body, renderDiffFile(m, diffIdx)...)
+		appendFileBlock(m, m.DiffFiles[diffIdx], width, add)
 		shown++
 	}
 	if shown == 0 {
-		return nil
+		return nil, nil
 	}
 	head := fmt.Sprintf("Directory: %s/ — %d file", dirPath, shown)
 	if shown != 1 {
 		head += "s"
 	}
-	return append([]string{head, ""}, body...)
+	lines := make([]string, 0, len(body)+2)
+	rows := make([]mainRow, 0, len(bodyRows)+2)
+	lines = append(lines, diffHeaderStyle.Render(head), "")
+	rows = append(rows, mainRow{Kind: rowMeta, RenderIndex: -1}, mainRow{Kind: rowMeta, RenderIndex: -1})
+	lines = append(lines, body...)
+	rows = append(rows, bodyRows...)
+	return lines, rows
+}
+
+// appendFileBlock emits one file's header (with a fold caret and +N/-N counts) and,
+// when expanded, its diff body. Side-by-side or unified is chosen by wantSplit(m).
+//
+// Every body row carries RenderIndex = -1: the 1:1 line↔Rendered[i] invariant that
+// enables thread anchors and line comments holds ONLY for a single-file unified diff.
+// Multi-file views are read-only by contract; a real index here would let thread and
+// anchor lookups resolve to the wrong file.
+func appendFileBlock(m Model, file diff.File, width int, add func(string, mainRow)) {
+	expanded := fileExpanded(m, file.Path)
+	caret := "▾"
+	if !expanded {
+		caret = "▸"
+	}
+	var adds, dels int
+	for _, l := range file.Rendered {
+		switch l.Kind {
+		case diff.LineKindAdd:
+			adds++
+		case diff.LineKindDel:
+			dels++
+		}
+	}
+	hdr := caret + " " + file.Path
+	if adds > 0 || dels > 0 {
+		hdr += fmt.Sprintf("  +%d/-%d", adds, dels)
+	}
+	add(diffHeaderStyle.Render(hdr), mainRow{Kind: rowFileHeader, RenderIndex: -1, Key: fileFoldKey(file.Path)})
+	if !expanded {
+		return
+	}
+	if wantSplit(m) {
+		for _, line := range buildSplitBodyLines(file, width) {
+			add(line, mainRow{Kind: rowCode, RenderIndex: -1})
+		}
+	} else {
+		hlLines := highlightedDiffLines(file)
+		for i, line := range file.Rendered {
+			if line.Kind == diff.LineKindFileHeader {
+				// The caret header above already names the file; the raw `diff --git`
+				// line would say it again. Only the single-file UNIFIED view keeps it —
+				// its 1:1 line↔Rendered contract is load-bearing, and it never comes
+				// through here.
+				continue
+			}
+			add(renderDiffLine(line, hlLines[i], width), mainRow{Kind: rowCode, RenderIndex: -1})
+		}
+	}
 }
 
 // showDirInMain points Main at the aggregate diff of a directory subtree WITHOUT
@@ -469,24 +533,41 @@ func renderDirDiff(m Model, dirPath string, indices []int) []string {
 // restricted to the visible set, so the same directory under a narrower filter is
 // a genuinely different view and must re-render.
 func showDirInMain(m Model, dirPath string) (Model, bool) {
+	if m.MainMode == MainDiff && m.MainDiff.Kind == mainDiffDir &&
+		m.MainDiff.DirPath == dirPath && m.MainDiff.DirFilter == m.FilesPanel.Filter &&
+		m.MainDiff.Split == wantSplit(m) {
+		return m, true
+	}
+	m, ok := renderDirInMain(m, dirPath)
+	if !ok {
+		return m, false
+	}
+	m.MainCursor = 0
+	m.MainScroll = 0
+	return m, true
+}
+
+// renderDirInMain draws a directory subtree's aggregate diff, honouring the sticky
+// side-by-side preference and per-file fold state. Separate from showDirInMain so
+// rerenderMainDiff can redraw the same subtree without resetting cursor and scroll.
+func renderDirInMain(m Model, dirPath string) (Model, bool) {
 	if m.PRDetail == nil || dirPath == "" {
 		return m, false
 	}
-	if m.MainMode == MainDiff && m.MainFileIndex < 0 &&
-		m.MainDirPath == dirPath && m.MainDirFilter == m.FilesPanel.Filter {
-		return m, true
-	}
-	lines := renderDirDiff(m, dirPath, filesUnderDir(m, dirPath))
+	lines, rows := renderDirDiff(m, dirPath, filesUnderDir(m, dirPath))
 	if len(lines) == 0 {
 		return m, false
 	}
 	m = setMainLines(m, lines)
-	m.MainDirPath = dirPath               // after setMainLines, which clears it
-	m.MainDirFilter = m.FilesPanel.Filter // ditto
-	m.MainFileIndex = -1                  // not a single-PR-file view: no line anchors
+	m.MainRows = rows // after setMainLines, which clears it
+	m.MainDiff = mainDiffSource{
+		Kind:      mainDiffDir,
+		DirPath:   dirPath,
+		DirFilter: m.FilesPanel.Filter,
+		Split:     wantSplit(m),
+	}
+	m.MainFileIndex = -1 // not a single-PR-file view: no line anchors
 	m.MainMode = MainDiff
-	m.MainCursor = 0
-	m.MainScroll = 0
 	return m, true
 }
 
@@ -497,6 +578,7 @@ func openFileInMain(m Model, idx int) Model {
 	}
 	return m.PushFocus(FocusMain)
 }
+
 func findDiffFileIndexByPath(files []diff.File, path string) int {
 	for i, file := range files {
 		if file.Path == path {
@@ -516,26 +598,32 @@ var (
 	diffMetaStyle   = lipgloss.NewStyle().Faint(true)
 )
 
-// renderCommitDiff formats one commit's parsed diff into Main-pane lines,
-// headed by the short SHA and message. Standalone — it does not touch
-// m.DiffFiles or the PR-level thread anchors.
-func renderCommitDiff(sha, headline string, files []diff.File, width int) []string {
-	short := sha
+// renderCommitDiff formats one commit's parsed diff into Main-pane lines plus the
+// parallel row model, headed by the short SHA and message. Standalone — it does not
+// touch m.DiffFiles or the PR-level thread anchors.
+//
+// Per-file blocks honour fold state and the side-by-side preference via
+// appendFileBlock. Every body row carries RenderIndex = -1 (read-only view).
+func renderCommitDiff(m Model, oid, headline string, files []diff.File, width int) ([]string, []mainRow) {
+	short := oid
 	if len(short) > 7 {
 		short = short[:7]
 	}
-	out := []string{diffHeaderStyle.Render(fmt.Sprintf("Commit %s  %s", short, headline))}
+	lines := make([]string, 0, 64)
+	rows := make([]mainRow, 0, 64)
+	add := func(s string, r mainRow) {
+		lines = append(lines, s)
+		rows = append(rows, r)
+	}
+	add(diffHeaderStyle.Render(fmt.Sprintf("Commit %s  %s", short, headline)), mainRow{Kind: rowMeta, RenderIndex: -1})
 	if len(files) == 0 {
-		return append(out, diffMetaStyle.Render("  (no changes)"))
+		add(diffMetaStyle.Render("  (no changes)"), mainRow{Kind: rowMeta, RenderIndex: -1})
+		return lines, rows
 	}
 	for _, f := range files {
-		out = append(out, diffHeaderStyle.Render("File: "+f.Path))
-		hlLines := highlightedDiffLines(f)
-		for i, line := range f.Rendered {
-			out = append(out, renderDiffLine(line, hlLines[i], width))
-		}
+		appendFileBlock(m, f, width, add)
 	}
-	return out
+	return lines, rows
 }
 
 // renderDiffFile renders one diff file into Main-pane lines. With
