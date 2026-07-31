@@ -319,18 +319,57 @@ func showThreadInMain(m Model, at diff.AnchoredThread) Model {
 	return followMainCursor(m)
 }
 
+// enterThreadFocus makes threadID the focus target and puts the Main cursor on the
+// comment under ThreadCursor. Setting the focus state alone was invisible: the hint
+// bar swapped to the thread bindings and not one pixel of the frame changed, so
+// there was nothing to tell you j/k now walked comments.
+func enterThreadFocus(m Model, threadID string) Model {
+	m.FocusedThreadID = threadID
+	// Read the comment index BEFORE expanding: refreshMainDiff preserves the cursor's
+	// thread or code line, not its CommentIdx, so expanding first would lose which
+	// comment you pressed enter on.
+	m.ThreadCursor = commentIdxAtMainCursor(m, threadID)
+	// Expand before locating the comment: a collapsed thread emits no comment rows.
+	m = expandThread(m, threadID)
+	m = syncMainCursorToComment(m)
+	if m.CurrentFocus() != FocusThread {
+		m = m.PushFocus(FocusThread)
+	}
+	return m
+}
+
+// commentIdxAtMainCursor reports which comment of threadID the Main cursor sits on,
+// so entering focus from the third comment lands on the third. Entering from the
+// thread's summary row or its anchored code line starts at the first.
+func commentIdxAtMainCursor(m Model, threadID string) int {
+	if r, ok := rowAt(m, m.MainCursor); ok && r.Kind == rowComment && r.ThreadID == threadID {
+		return r.CommentIdx
+	}
+	return 0
+}
+
+// syncMainCursorToComment moves the Main cursor onto the first row of the focused
+// comment and scrolls it into view, which is what makes j/k in thread focus legible.
+func syncMainCursorToComment(m Model) Model {
+	at, ok := focusedThread(m)
+	if !ok {
+		return m
+	}
+	start, n := mainLineSpanForComment(m, at.Thread.ID, m.ThreadCursor)
+	if n == 0 {
+		return m
+	}
+	m.MainCursor = start
+	return followMainCursor(m)
+}
+
 // jumpToAnchoredThread shows the thread and then takes focus: the thread itself when
 // focusThread, else Main. Use showThreadInMain directly to follow without stealing
 // focus from the panel doing the following.
 func jumpToAnchoredThread(m Model, at diff.AnchoredThread, focusThread bool) Model {
 	m = showThreadInMain(m, at)
 	if focusThread {
-		m.ThreadCursor = 0
-		m.FocusedThreadID = at.Thread.ID
-		if m.CurrentFocus() != FocusThread {
-			m = m.PushFocus(FocusThread)
-		}
-		return m
+		return enterThreadFocus(m, at.Thread.ID)
 	}
 	if m.CurrentFocus() != FocusMain {
 		m = m.PushFocus(FocusMain)

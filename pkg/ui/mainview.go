@@ -174,9 +174,7 @@ func UpdateMain(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m = cycleMentionJump(m, -1)
 	case "enter":
 		if id := threadIDAtMainCursor(m); id != "" {
-			m.FocusedThreadID = id
-			m.ThreadCursor = 0
-			m = m.PushFocus(FocusThread)
+			m = enterThreadFocus(m, id)
 		}
 	case "v":
 		if m.MainMode != MainDiff || m.Config.GUI.DiffPager != "" {
@@ -292,10 +290,12 @@ func UpdateThreadFocus(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "j", "down":
 		if m.ThreadCursor < n-1 {
 			m.ThreadCursor++
+			m = syncMainCursorToComment(m)
 		}
 	case "k", "up":
 		if m.ThreadCursor > 0 {
 			m.ThreadCursor--
+			m = syncMainCursorToComment(m)
 		}
 	case "e":
 		c, ok := focusedComment(m)
@@ -442,6 +442,12 @@ func fullView(m Model) string {
 
 	focus := m.CurrentFocus()
 	fi := focusedPanelIndex(focus)
+	// Thread focus acts on content in Main, so no side panel wears the focus border.
+	// focusedPanelIndex still reports 3 for FocusThread because layout.go uses it to
+	// allocate panel heights — this override is render-only, deliberately.
+	if focus == FocusThread {
+		fi = -1
+	}
 
 	sidePanes := func(w int) []string {
 		return []string{
@@ -453,14 +459,10 @@ func fullView(m Model) string {
 		}
 	}
 	mainPane := func(w, h int) string {
-		anchor := 1 + m.MainCursor
-		span := 1
-		if mainRangeActive(m) {
-			lo, hi := mainRangeBounds(m)
-			anchor = 1 + lo
-			span = hi - lo + 1
-		}
-		return renderPane(paneBox{titled: true, number: 0, content: MainView(m), width: w, height: h, anchor: anchor, focused: focus == FocusMain, scroll: &m.MainScroll, loading: m.LoadingDetail, selectionSpan: span})
+		anchor, span := mainSelection(m, focus)
+		// Thread focus acts on content in Main, so Main is the pane that owns the
+		// user's attention — the border must say so.
+		return renderPane(paneBox{titled: true, number: 0, content: MainView(m), width: w, height: h, anchor: anchor, focused: focus == FocusMain || focus == FocusThread, scroll: &m.MainScroll, loading: m.LoadingDetail, selectionSpan: span})
 	}
 
 	body := ""
@@ -491,6 +493,28 @@ func fullView(m Model) string {
 		parts = append(parts, fitWidth(hint, layout.Width))
 	}
 	return strings.Join(parts, "\n")
+}
+
+// mainSelection reports the Main pane's selection: the anchor row (1-based, past
+// the title line) and how many rows it covers. Extracted from the render closure
+// so the thread-focus case is directly assertable — burying it there is why the
+// focused comment could go unhighlighted with no test noticing.
+func mainSelection(m Model, focus FocusContext) (anchor, span int) {
+	switch {
+	case mainRangeActive(m):
+		lo, hi := mainRangeBounds(m)
+		return 1 + lo, hi - lo + 1
+	case focus == FocusThread:
+		// Cover the whole focused comment. The cursor already sits on its first
+		// row, but a comment is a block of wrapped markdown, and marking one row
+		// of it looks identical to ordinary cursor movement.
+		if at, ok := focusedThread(m); ok {
+			if lo, n := mainLineSpanForComment(m, at.Thread.ID, m.ThreadCursor); n > 0 {
+				return 1 + lo, n
+			}
+		}
+	}
+	return 1 + m.MainCursor, 1
 }
 
 // activeOverlay returns the content and selection anchor of the floating overlay

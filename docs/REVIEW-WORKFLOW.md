@@ -254,6 +254,15 @@ is also off when `gui.diffPager` is set, for the same reason it's off in Files.
 
 Once a thread is focused (its own context):
 
+**What you should see** when you press `enter`: the Main pane border lights up, the
+cursor jumps onto the comment, and the whole comment — author line and every wrapped
+body row — is highlighted. A resolved or outdated thread is collapsed by default and
+unfolds. If the thread has only one comment, `j` / `k` have nowhere to go and
+deliberately do nothing.
+
+`enter` keeps your place: press it on the third comment and the third is focused, not
+the first.
+
 | Key | Does |
 |---|---|
 | `j` / `k` | Move between comments in the thread |

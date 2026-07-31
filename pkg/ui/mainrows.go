@@ -258,6 +258,49 @@ func mainLineForThread(m Model, threadID string) int {
 	return -1
 }
 
+// mainLineSpanForComment returns the Main line range one comment occupies: its
+// author line plus every wrapped markdown body row. A comment is a block, not a
+// line, so a caller highlighting only the first row would be indistinguishable
+// from the ordinary cursor.
+func mainLineSpanForComment(m Model, threadID string, commentIdx int) (start, count int) {
+	start = -1
+	if threadID == "" {
+		return start, 0
+	}
+	for i, r := range m.MainRows {
+		if r.Kind != rowComment || r.ThreadID != threadID || r.CommentIdx != commentIdx {
+			continue
+		}
+		if start < 0 {
+			start = i
+		}
+		count++
+	}
+	return start, count
+}
+
+// expandThread forces a thread's block open. Focus entering a thread must be able
+// to land on a comment, and resolved/outdated threads default to collapsed — so
+// without this, focusing one would have no rows to point at.
+func expandThread(m Model, threadID string) Model {
+	for _, at := range m.AnchoredThreads {
+		if at.Thread.ID != threadID {
+			continue
+		}
+		if threadExpanded(m, at.Thread) {
+			return m
+		}
+		next := make(map[string]bool, len(m.Folded)+1)
+		for k, v := range m.Folded {
+			next[k] = v
+		}
+		next[threadID] = false
+		m.Folded = next
+		return refreshMainDiff(m)
+	}
+	return m
+}
+
 // refreshMainDiff re-renders the diff Main is already showing, keeping the cursor
 // on the same THING rather than the same row index — injecting or folding a thread
 // block shifts every row below it, so a raw index would drift onto unrelated
