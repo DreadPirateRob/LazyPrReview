@@ -35,9 +35,11 @@ Still product-roadmapped beyond this phase:
 ## Build
 
 ```bash
-go test ./...
-mkdir -p ./bin && go build -o ./bin/lazypr ./cmd/lazypr
+make          # check + build
 ```
+
+See [Verification](#verification) for the individual targets and the formatting
+standard.
 
 ## Run
 
@@ -131,23 +133,30 @@ Notable keys:
 
 ## Verification
 
-Full repo suite:
+`make` wraps the whole loop; `make help` lists every target.
 
 ```bash
-go test ./...
+make check   # fmt-check + vet + unit suite (exactly what CI enforces)
+make build   # binary into ./bin
+make e2e     # live smoke against a real public PR (needs an authenticated gh)
 ```
 
-Build binary:
+The underlying commands still work directly (`go test ./...`, `go build ./cmd/lazypr`)
+if you would rather not go through `make`.
+
+### Formatting standard
+
+`gofmt` plus `goimports` with a local-prefix group. Imports are split into up to
+three groups, always in this order: stdlib, third-party, then this module.
 
 ```bash
-mkdir -p ./bin && go build -o ./bin/lazypr ./cmd/lazypr
+make fmt         # apply it
+make fmt-check   # fail on drift, never rewrite
 ```
 
-Env-gated live smoke against a real public PR:
-
-```bash
-LAZYPR_E2E=1 go test ./cmd/lazypr -run TestE2EReadOnlySmoke -count=1
-```
+`goimports` is pinned in the Makefile (`GOIMPORTS_VERSION`) so the standard cannot
+drift between machines and CI. `.editorconfig` carries the same whitespace rules for
+editors that do not run `gofmt` on save.
 
 ## Notes
 

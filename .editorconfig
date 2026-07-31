@@ -1,0 +1,28 @@
+# Baseline whitespace rules, so an editor that ignores gofmt still agrees with it.
+# See the Makefile for the authoritative Go formatting standard.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.go]
+indent_style = tab
+indent_size = 4
+
+[*.{yml,yaml,json}]
+indent_style = space
+indent_size = 2
+
+[Makefile]
+indent_style = tab
+
+# Trailing whitespace is significant in Markdown (two spaces = hard break),
+# and the docs contain box-drawing layout mocks that must keep their padding.
+[*.md]
+trim_trailing_whitespace = false
+indent_style = space
+indent_size = 2

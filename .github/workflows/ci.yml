@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref: only the newest push matters.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # Track the toolchain declared in go.mod rather than pinning it twice.
+          go-version-file: go.mod
+          cache: true
+
+      # fmt-check, vet and the unit suite. The E2E smoke test is deliberately
+      # excluded: it drives a real terminal against a live GitHub PR and needs
+      # an authenticated gh, so it stays a local-only target.
+      - run: make check
+
+      - run: make build
