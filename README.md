@@ -25,6 +25,7 @@ Also shipped beyond that phase (Phase 2 authoring core):
 - reply, edit and delete drafts; submit-review menu with discard confirm
 - resolve/unresolve from the Threads panel
 - markdown-rendered comment bodies, foldable PR overview, author bot/human flags
+- side-by-side diff view (`|`, read-only)
 
 Still product-roadmapped:
 - suggestions (`s`), context expansion `{`/`}`, whitespace toggle, Checks watch mode,

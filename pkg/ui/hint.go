@@ -76,14 +76,16 @@ func hintEntries(b *keymap.Bindings, ctx string) []hintEntry {
 	//
 	// Demoted: `zz` centering (a vim-ism power users know), the REVERSE half of the
 	// thread/mention navigation pairs (once `t` and `m` are visible, `T`/`M` follow
-	// the universal shift-reverses convention), and overview fold-all, which mirrors
-	// keys the Files panel already teaches.
+	// the universal shift-reverses convention), overview fold-all, which mirrors keys
+	// the Files panel already teaches, and the side-by-side toggle — the Main bar is
+	// already at its budget, and adding it overflowed and truncated the row.
 	demoted := map[string]bool{
 		"centerCursor":         true,
 		"prevUnresolvedThread": true,
 		"prevMention":          true,
 		"collapseAllOverview":  true,
 		"expandAllOverview":    true,
+		"toggleSplitDiff":      true,
 	}
 	if ctx != keymap.ContextUniversal {
 		for _, a := range all {

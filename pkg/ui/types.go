@@ -143,8 +143,13 @@ type Model struct {
 	// MainFileIndex = -1, since a directory view is not a single-PR-file view, and
 	// both are cleared by setMainLines so every other Main-content path drops them
 	// without having to remember to.
-	MainDirPath       string
-	MainDirFilter     string
+	MainDirPath   string
+	MainDirFilter string
+	// MainSplitPath names the file whose side-by-side diff Main is showing, or ""
+	// for any other content. Like MainDirPath it pairs with MainFileIndex = -1 —
+	// the side-by-side view is read-only, so it is not a line-addressable PR file —
+	// and is cleared by setMainLines so every other Main-content path drops it.
+	MainSplitPath     string
 	MainCursor        int
 	MainScroll        int
 	MainPendingZ      bool

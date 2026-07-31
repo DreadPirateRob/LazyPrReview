@@ -18,11 +18,12 @@ import (
 func setMainLines(m Model, lines []string) Model {
 	m.MainLines = lines
 	m.MainGen++
-	// Any new Main content leaves the directory view and drops the row model;
-	// showDirInMain and setMainDiff re-set theirs immediately after their own
-	// call, so those are the only places that opt back in.
+	// Any new Main content leaves the directory and side-by-side views and drops the
+	// row model; showDirInMain, toggleSplitView and setMainDiff re-set theirs
+	// immediately after their own call, so those are the only places that opt back in.
 	m.MainDirPath = ""
 	m.MainDirFilter = ""
+	m.MainSplitPath = ""
 	m.MainRows = nil
 	return m
 }
@@ -96,6 +97,11 @@ func UpdateMain(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	// on a comment, and a diff has none.
 	if m.MainMode == MainOverview && ks == "b" {
 		return toggleAuthorRole(m)
+	}
+
+	// Side-by-side is a diff-only view; the overview has no old/new sides to pair.
+	if ks == "|" {
+		return toggleSplitView(m)
 	}
 
 	switch ks {

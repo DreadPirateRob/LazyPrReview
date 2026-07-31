@@ -38,6 +38,9 @@ const (
 	ToastDeleteFailed             = "Delete failed"
 	ToastCannotReply              = "You can't reply to this thread"
 	ToastReplyFailed              = "Reply failed"
+	ToastSplitNeedsFile           = "Side-by-side needs a single file diff"
+	ToastSplitTooNarrow           = "Too narrow for side-by-side — try + for fullscreen"
+	ToastSplitUnavailablePager    = "Side-by-side is unavailable with an external diff pager"
 )
 
 // ToastViewedToggleFailedN returns the aggregate failure toast for a
