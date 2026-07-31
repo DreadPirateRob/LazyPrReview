@@ -295,8 +295,7 @@ func setMainFile(m Model, diffIdx int) Model {
 	if diffIdx < 0 || diffIdx >= len(m.DiffFiles) {
 		return m
 	}
-	m.MainFileIndex = diffIdx
-	m = setMainDiff(m, diffIdx)
+	m = renderDiffInMain(m, diffIdx) // honours the sticky side-by-side preference
 	m.MainMode = MainDiff
 	m.MainCursor = 0
 	m.MainScroll = 0
@@ -372,13 +371,15 @@ func showFileInMain(m Model, idx int) (Model, bool) {
 	if diffIdx < 0 {
 		return m, false
 	}
-	if m.MainMode == MainDiff && m.MainFileIndex == diffIdx {
+	// Already showing this file? Both representations count: the unified view records
+	// the index, the side-by-side view the path. Without the second check the Files
+	// panel would rebuild the same split view on every cursor bounce.
+	if m.MainMode == MainDiff && (m.MainFileIndex == diffIdx || m.MainSplitPath == m.DiffFiles[diffIdx].Path) {
 		return m, true
 	}
-	m.MainFileIndex = diffIdx
 	m.MainCursor = 0
 	m.MainScroll = 0
-	m = setMainDiff(m, diffIdx)
+	m = renderDiffInMain(m, diffIdx) // honours the sticky side-by-side preference
 	m.MainMode = MainDiff
 	return m, true
 }

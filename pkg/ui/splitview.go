@@ -114,10 +114,39 @@ func renderSplitSide(line *diff.RenderedLine, code string, sideW int, old bool) 
 // splitFits reports whether the pane can host the side-by-side view.
 func splitFits(width int) bool { return width >= splitMinWidth }
 
-// toggleSplitView flips the file on screen between unified and side-by-side.
+// renderDiffInMain draws one file into Main, honouring the sticky side-by-side
+// preference. Every file-BROWSING path routes through here — opening a file, `[`/`]`,
+// and the Files panel following its cursor — which is what makes the mode survive a
+// focus change instead of snapping back to unified on the next render.
 //
-// Leaving the view restores the unified render of the same file, and with it
-// MainFileIndex and every line-scoped action.
+// Thread positioning deliberately does NOT route through here: showThreadInMain
+// calls setMainDiff directly, because a thread has no side-by-side representation
+// and landing the cursor on a row that does not exist would be worse than the mode
+// briefly giving way.
+//
+// diffIdx indexes DiffFiles, the same space MainFileIndex uses.
+func renderDiffInMain(m Model, diffIdx int) Model {
+	if diffIdx < 0 || diffIdx >= len(m.DiffFiles) {
+		return m
+	}
+	// A pane too narrow for two columns silently renders unified: this runs on every
+	// file change, so a toast here would fire repeatedly. The explicit toggle is
+	// where the reason gets reported.
+	if m.DiffSplit && m.Config.GUI.DiffPager == "" && splitFits(mainContentWidth(m)) {
+		width := mainContentWidth(m)
+		path := m.DiffFiles[diffIdx].Path
+		m = setMainLines(m, buildSplitLines(m, diffIdx, width))
+		m.MainSplitPath = path // after setMainLines, which clears it
+		m.MainFileIndex = -1   // read-only view: no line anchors, per the shared contract
+		return m
+	}
+	m.MainFileIndex = diffIdx
+	return setMainDiff(m, diffIdx)
+}
+
+// toggleSplitView flips the sticky side-by-side preference and re-renders the file
+// on screen. Turning it off restores the unified render, and with it MainFileIndex
+// and every line-scoped action.
 func toggleSplitView(m Model) (Model, tea.Cmd) {
 	if m.MainMode != MainDiff || m.PRDetail == nil {
 		return m, nil
@@ -128,38 +157,31 @@ func toggleSplitView(m Model) (Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if m.MainSplitPath != "" {
-		// Back to unified. setMainDiff takes a DiffFiles index, the same space
-		// MainFileIndex and findDiffFileIndexByPath use, so the restore stays in one
-		// index space — showFileInMain would have wanted a PRDetail.Files index.
-		// Restoring MainFileIndex is what switches every line-scoped action back on.
-		if idx := findDiffFileIndexByPath(m.DiffFiles, m.MainSplitPath); idx >= 0 {
-			m.MainFileIndex = idx
-			m.MainCursor = 0
-			m.MainScroll = 0
-			m = setMainDiff(m, idx) // clears MainSplitPath through setMainLines
-			m.MainMode = MainDiff
-		}
-		return m, nil
-	}
-
+	// Which file is on screen: the split view records its path, the unified view its
+	// index. Toggling acts on that file whichever way round it is.
 	idx := m.MainFileIndex
+	if m.MainSplitPath != "" {
+		idx = findDiffFileIndexByPath(m.DiffFiles, m.MainSplitPath)
+	}
 	if idx < 0 || idx >= len(m.DiffFiles) {
 		m.Toast = NewToast(ToastSplitNeedsFile)
 		return m, nil
 	}
-	width := mainContentWidth(m)
-	if !splitFits(width) {
+
+	if m.MainSplitPath == "" && !splitFits(mainContentWidth(m)) {
 		m.Toast = NewToast(ToastSplitTooNarrow)
 		return m, nil
 	}
 
-	path := m.DiffFiles[idx].Path
-	m = setMainLines(m, buildSplitLines(m, idx, width))
-	m.MainSplitPath = path // after setMainLines, which clears it
-	m.MainFileIndex = -1   // read-only view: no line anchors, per the shared contract
-	m.MainMode = MainDiff
+	// The toggle acts on WHAT IS ON SCREEN, not on the preference. After a thread
+	// jump has forced unified, `|` therefore puts side-by-side back rather than
+	// switching the preference off and changing nothing visible — a toggle that
+	// leaves the frame identical is indistinguishable from a broken key.
+	showingSplit := m.MainSplitPath != ""
+	m.DiffSplit = !showingSplit
 	m.MainCursor = 0
 	m.MainScroll = 0
+	m = renderDiffInMain(m, idx)
+	m.MainMode = MainDiff
 	return m, nil
 }

@@ -149,7 +149,14 @@ type Model struct {
 	// for any other content. Like MainDirPath it pairs with MainFileIndex = -1 —
 	// the side-by-side view is read-only, so it is not a line-addressable PR file —
 	// and is cleared by setMainLines so every other Main-content path drops it.
-	MainSplitPath     string
+	MainSplitPath string
+	// DiffSplit is the sticky side-by-side preference. Unlike MainSplitPath, which
+	// records what Main happens to be showing and is cleared on every content
+	// change, this survives focus changes, file switches and the Files panel
+	// following its cursor: once you ask for side-by-side you keep it until you
+	// toggle it off. Thread jumps are the one exception — threads are not rendered
+	// side-by-side, so those land in the unified diff without disturbing it.
+	DiffSplit         bool
 	MainCursor        int
 	MainScroll        int
 	MainPendingZ      bool

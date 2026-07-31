@@ -161,3 +161,102 @@ func TestSplitRowsShareOneDividerColumn(t *testing.T) {
 		}
 	}
 }
+
+// The reported bug: switch to side-by-side, focus the Files panel, and the panel's
+// cursor-follow rebuilt Main as unified — the mode was a property of the content
+// rather than a preference.
+func TestSplitSurvivesFilesPanelFollow(t *testing.T) {
+	m := splitModel(t)
+	split, _ := UpdateMain(m, tea.KeyPressMsg{Text: "|", Code: '|'})
+	if split.MainSplitPath == "" {
+		t.Fatal("precondition: should be in side-by-side")
+	}
+	splitLines := strings.Join(split.MainLines, "\n")
+
+	// Focus Files, which follows its selection into Main.
+	followed := followFilesSelection(split.PushFocus(FocusFiles))
+	if !followed.DiffSplit {
+		t.Fatal("the side-by-side preference must survive a focus change")
+	}
+	if followed.MainSplitPath == "" {
+		t.Fatal("following the Files cursor must keep rendering side-by-side")
+	}
+	if strings.Join(followed.MainLines, "\n") != splitLines {
+		t.Fatal("the same file should still be rendered side-by-side after the focus bounce")
+	}
+}
+
+// Same for moving between files: the mode belongs to the reader, not the file.
+func TestSplitSurvivesFileSwitch(t *testing.T) {
+	m := splitModel(t)
+	// diffModel's fixture is a single file, so extend it — this is about carrying the
+	// mode ACROSS files, which one file cannot exercise.
+	files, err := diff.Parse(anchorSampleDiff + "\ndiff --git a/second.go b/second.go\n--- a/second.go\n+++ b/second.go\n@@ -1 +1 @@\n-was\n+now\n")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(files) < 2 {
+		t.Fatalf("fixture must parse two files, got %d", len(files))
+	}
+	m.DiffFiles = files
+	m.MainFileIndex = 0
+	m = setMainDiff(m, 0)
+
+	split, _ := UpdateMain(m, tea.KeyPressMsg{Text: "|", Code: '|'})
+	first := split.MainSplitPath
+	if first == "" {
+		t.Fatal("precondition: should be in side-by-side")
+	}
+
+	next := setMainFile(split, 1)
+	if next.MainSplitPath == "" {
+		t.Fatal("switching files must keep side-by-side")
+	}
+	if next.MainSplitPath == first {
+		t.Fatalf("switching files should show the new file, still on %q", first)
+	}
+	if next.MainSplitPath != files[1].Path {
+		t.Fatalf("should be showing %q, got %q", files[1].Path, next.MainSplitPath)
+	}
+}
+
+// Turning it off has to stick too, or the toggle is one-way.
+func TestUnifiedSurvivesAfterToggleOff(t *testing.T) {
+	m := splitModel(t)
+	split, _ := UpdateMain(m, tea.KeyPressMsg{Text: "|", Code: '|'})
+	back, _ := UpdateMain(split, tea.KeyPressMsg{Text: "|", Code: '|'})
+	if back.DiffSplit {
+		t.Fatal("toggling off must clear the preference")
+	}
+
+	followed := followFilesSelection(back.PushFocus(FocusFiles))
+	if followed.MainSplitPath != "" {
+		t.Fatal("with the preference off, following must render unified")
+	}
+}
+
+// A thread has no side-by-side representation, so jumping to one renders unified —
+// but it must not silently rewrite the preference.
+func TestThreadJumpRendersUnifiedWithoutClearingPreference(t *testing.T) {
+	m := splitModel(t)
+	m.PRDetail.Threads = []domain.Thread{{
+		ID: "tS", Path: m.DiffFiles[0].Path, DiffSide: "RIGHT", Line: intPtr(1),
+		Comments: []domain.Comment{{Body: "hi"}},
+	}}
+	m.AnchoredThreads, m.UnresolvedThreadIndex = buildAnchors(m.PRDetail, m.DiffFiles)
+	if len(m.AnchoredThreads) == 0 {
+		t.Skip("fixture thread did not anchor")
+	}
+	split, _ := UpdateMain(m, tea.KeyPressMsg{Text: "|", Code: '|'})
+
+	jumped := showThreadInMain(split, m.AnchoredThreads[0])
+	if jumped.MainSplitPath != "" {
+		t.Fatal("a thread jump must render unified — threads are not drawn side-by-side")
+	}
+	if !jumped.DiffSplit {
+		t.Fatal("a thread jump must not silently turn the preference off")
+	}
+	if jumped.MainFileIndex < 0 {
+		t.Fatal("the unified render must restore the file anchor so the thread is addressable")
+	}
+}

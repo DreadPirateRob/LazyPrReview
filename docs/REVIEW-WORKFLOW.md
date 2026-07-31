@@ -170,7 +170,7 @@ In Main (`0` or `enter` from Files):
 | `z` | Fold / unfold the thread block under the cursor |
 | `space` | Toggle viewed for the file you're reading (on its header row) |
 | `enter` | Focus the thread under the cursor |
-| `\|` | Side-by-side view of this file — read-only, `\|` again to come back |
+| `\|` | Side-by-side for this file — read-only, and stays on until you toggle it off |
 
 ### Side by side
 
@@ -178,14 +178,23 @@ In Main (`0` or `enter` from Files):
 on both sides so your eye can track across; a modified line sits opposite the line it
 replaced, and where one side has more lines than the other you get blank filler.
 
-It is deliberately **read-only** — the same footing as a commit-scoped diff. While
-it's open, `c`, `v`, `space` and `enter` on a thread do nothing, and comment threads
-aren't drawn inline. Press `\|` again to return to the unified view and get all of
-that back.
+**It stays on until you turn it off.** Moving between files, bouncing focus to the
+Files panel and back, `[` / `]` — all of it keeps side-by-side. It's your reading
+mode, not a property of one file.
 
-Two columns need room. Below 80 columns of Main it refuses with a toast; `+` widens
-Main and usually fixes it. It's also unavailable when `gui.diffPager` is set, since
-the external pager renders its own layout.
+The one exception is thread navigation. Threads aren't drawn side-by-side, so `t`,
+`m`, and `enter` from the Threads panel land you in the unified diff — that's the only
+view that can show you the comment. Your preference isn't lost: press `\|` and you're
+back in side-by-side.
+
+It is deliberately **read-only** — the same footing as a commit-scoped diff. While
+it's showing, `c`, `v`, `space` and `enter` on a thread do nothing, and comment
+threads aren't drawn inline. The unified view gives all of that back.
+
+Two columns need room. Below 80 columns of Main you get unified instead — on an
+explicit `\|` it tells you why; `+` widens Main and usually fixes it. It's also
+unavailable when `gui.diffPager` is set, since the external pager renders its own
+layout.
 
 ### Comments appear in the diff
 
