@@ -519,8 +519,8 @@ func TestPROverviewShowsMetadataAndConversation(t *testing.T) {
 		Assignees:          []string{"carol"},
 		PendingReviewCount: 2,
 		Timeline: []domain.TimelineItem{
-			{Kind: "IssueComment", Author: "dave", Body: "looks good"},
-			{Kind: "PullRequestReview", Author: "erin", State: "APPROVED", Body: "ship it"},
+			{Kind: "comment", Author: "dave", Body: "looks good"},
+			{Kind: "review", Author: "erin", State: "APPROVED", Body: "ship it"},
 		},
 		Threads: []domain.Thread{
 			{
@@ -581,7 +581,7 @@ func TestPROverviewRespectsWidth(t *testing.T) {
 		Number: 1, Title: "wide", State: "OPEN",
 		Body: strings.Repeat("lorem ipsum dolor sit amet ", 20),
 		Timeline: []domain.TimelineItem{
-			{Kind: "IssueComment", Author: "dave", Body: strings.Repeat("chatter ", 60)},
+			{Kind: "comment", Author: "dave", Body: strings.Repeat("chatter ", 60)},
 		},
 	}
 	m.PRDetail = &d
@@ -864,8 +864,8 @@ func samplePRDetail() domain.PRDetail {
 			{Kind: "checkRun", Name: "lint", Status: "completed", Conclusion: "failure"},
 		},
 		Timeline: []domain.TimelineItem{
-			{Kind: "IssueComment", Author: "alice", Body: "LGTM!", SortAt: t1},
-			{Kind: "PullRequestReview", Author: "bob", Body: "Looks good to merge", SortAt: t2},
+			{Kind: "comment", Author: "alice", Body: "LGTM!", SortAt: t1},
+			{Kind: "review", Author: "bob", Body: "Looks good to merge", SortAt: t2},
 		},
 	}
 }

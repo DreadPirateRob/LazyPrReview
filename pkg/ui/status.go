@@ -52,9 +52,14 @@ func StatusView(m Model) string {
 
 	// PR-level info (only when a PR is open)
 	if m.PRDetail != nil {
-		// Review decision
+		// Review decision, with the approvers named — the decision alone says the
+		// gate passed, not whose judgment it rests on.
 		if m.PRDetail.ReviewDecision != "" {
-			sb.WriteString(fmt.Sprintf("review: %s\n", m.PRDetail.ReviewDecision))
+			line := m.PRDetail.ReviewDecision
+			if by := approverLogins(*m.PRDetail); len(by) > 0 {
+				line += " by " + strings.Join(by, ", ")
+			}
+			sb.WriteString(fmt.Sprintf("review: %s\n", line))
 		}
 
 		// Requested reviewers

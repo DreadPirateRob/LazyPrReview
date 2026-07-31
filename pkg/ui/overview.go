@@ -120,6 +120,11 @@ func stateBadge(d domain.PRDetail) string {
 	case "OPEN":
 		return ovOpenStyle.Render("● OPEN")
 	case "MERGED":
+		// Name who merged: "merged" alone answers what happened but not who to ask
+		// about it.
+		if d.MergedBy != "" {
+			return ovMergedStyle.Render("✔ MERGED by " + d.MergedBy)
+		}
 		return ovMergedStyle.Render("✔ MERGED")
 	case "CLOSED":
 		return ovClosedStyle.Render("✗ CLOSED")
@@ -127,10 +132,15 @@ func stateBadge(d domain.PRDetail) string {
 	return ovLabelStyle.Render(orDash(d.State))
 }
 
-// reviewBadge styles the review decision with the SPEC §D2 glyph vocabulary.
+// reviewBadge styles the review decision with the SPEC §D2 glyph vocabulary. An
+// approval names its approvers: the decision alone says the gate passed, not whose
+// judgment it rests on, and that is usually the next person you need to talk to.
 func reviewBadge(d domain.PRDetail) string {
 	switch strings.ToUpper(d.ReviewDecision) {
 	case "APPROVED":
+		if by := approverLogins(d); len(by) > 0 {
+			return ovOpenStyle.Render("✓ APPROVED by " + strings.Join(by, ", "))
+		}
 		return ovOpenStyle.Render("✓ APPROVED")
 	case "CHANGES_REQUESTED":
 		return ovClosedStyle.Render("± CHANGES REQUESTED")
@@ -140,6 +150,20 @@ func reviewBadge(d domain.PRDetail) string {
 		return ""
 	}
 	return ovLabelStyle.Render(d.ReviewDecision)
+}
+
+// approverLogins lists the reviewers whose LATEST review approves, in review order.
+// latestReviews is already one-per-reviewer, so no dedup pass is needed: a reviewer
+// who approved and then requested changes appears once, as CHANGES_REQUESTED, and is
+// correctly absent here.
+func approverLogins(d domain.PRDetail) []string {
+	var out []string
+	for _, r := range d.LatestReviews {
+		if strings.EqualFold(r.State, "APPROVED") && r.Author != "" {
+			out = append(out, r.Author)
+		}
+	}
+	return out
 }
 
 // sectionRule renders a titled full-width rule, e.g. "── Description ───────".
@@ -407,16 +431,25 @@ func appendOverviewThread(m Model, th domain.Thread, width int, add func(string,
 	}
 }
 
-// appendEventRows emits one timeline comment: a summary row (the fold target) and,
+// appendEventRows emits one timeline event: a summary row (the fold target) and,
 // when expanded, its markdown-rendered body under a gutter.
+//
+// An event with no body — a human approval, the merge event — is not foldable:
+// there is nothing to reveal, so it renders a plain `·` marker instead of a caret
+// and carries no fold key. Its outcome is stated by the state glyph instead, which
+// is what makes an empty-bodied approval visible at all.
 func appendEventRows(m Model, it domain.TimelineItem, width int, add func(string, mainRow)) {
 	key := timelineKey(it)
 	bot := isBotAuthor(m, it.Author)
 	expanded := overviewExpanded(m, key, bot)
+	foldable := strings.TrimSpace(it.Body) != ""
 
-	caret := "▸"
-	if expanded {
-		caret = "▾"
+	caret := "·"
+	if foldable {
+		caret = "▸"
+		if expanded {
+			caret = "▾"
+		}
 	}
 	author := ovAuthorStyle.Render(orDash(it.Author))
 	if bot {
@@ -424,16 +457,24 @@ func appendEventRows(m Model, it domain.TimelineItem, width int, add func(string
 	}
 	head := fmt.Sprintf("%s %s %s", caret, author,
 		ovMetaStyle.Render(timelineVerb(it)+" · "+shortTime(it.SortAt)))
-	if g := verdictGlyph(it.Body); g != "" && !expanded {
+	if sg := timelineStateGlyph(it); sg != "" {
+		// Review outcome / merge marker: carried by the STATE, not the body, so it
+		// shows expanded or not.
+		head += "  " + sg
+	} else if g := verdictGlyph(it.Body); g != "" && !expanded {
 		head += "  " + g
 	}
-	add(head, mainRow{Kind: rowEventHeader, RenderIndex: -1, Key: key, Author: it.Author})
-	if !expanded {
+	row := mainRow{Kind: rowEventHeader, RenderIndex: -1, Author: it.Author}
+	if foldable {
+		row.Key = key // only foldable rows advertise a fold target to z
+	}
+	add(head, row)
+	if !expanded || !foldable {
 		return
 	}
-	row := mainRow{Kind: rowEventBody, RenderIndex: -1, Key: key, Author: it.Author}
+	body := mainRow{Kind: rowEventBody, RenderIndex: -1, Key: key, Author: it.Author}
 	for _, l := range renderMarkdownFor(it.Body, width-2, m.ViewerLogin) {
-		add(threadGutter+l, row)
+		add(threadGutter+l, body)
 	}
 }
 

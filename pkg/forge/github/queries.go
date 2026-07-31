@@ -14,6 +14,7 @@ const queryPRDetail = `query PRDetail($owner: String!, $name: String!, $number: 
       baseRefName headRefName headRefOid
       additions deletions changedFiles
       mergeable reviewDecision
+      mergedAt mergedBy { login }
       labels(first: 20) { nodes { name color } }
       files(first: 100) {
         pageInfo { hasNextPage endCursor }

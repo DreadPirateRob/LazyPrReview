@@ -27,11 +27,11 @@ func overviewModel(t *testing.T) Model {
 		ReviewDecision: "APPROVED",
 		Body:           "JIRA https://example.test/browse/CJ-10354",
 		Timeline: []domain.TimelineItem{
-			{Kind: "IssueComment", Author: "github-actions", SortAt: at(0), Body: "**Verdict:** ▲ Needs Changes"},
-			{Kind: "IssueComment", Author: "github-actions", SortAt: at(1), Body: "**Verdict:** ✅ Approved"},
-			{Kind: "IssueComment", Author: "github-actions", SortAt: at(2), Body: "**Verdict:** ✅ Approved"},
-			{Kind: "IssueComment", Author: "DreadPirateRob", SortAt: at(3), Body: "@codex take a look"},
-			{Kind: "IssueComment", Author: "fazil56", SortAt: at(4), Body: "done"},
+			{Kind: "comment", Author: "github-actions", SortAt: at(0), Body: "**Verdict:** ▲ Needs Changes"},
+			{Kind: "comment", Author: "github-actions", SortAt: at(1), Body: "**Verdict:** ✅ Approved"},
+			{Kind: "comment", Author: "github-actions", SortAt: at(2), Body: "**Verdict:** ✅ Approved"},
+			{Kind: "comment", Author: "DreadPirateRob", SortAt: at(3), Body: "@codex take a look"},
+			{Kind: "comment", Author: "fazil56", SortAt: at(4), Body: "done"},
 		},
 	}
 	m := New(config.Default(), fakeforge.New())
@@ -210,7 +210,7 @@ func TestOverviewLinesFitBudget(t *testing.T) {
 	m := overviewModel(t)
 	// A long unbroken body is the hard case.
 	m.PRDetail.Timeline = append(m.PRDetail.Timeline, domain.TimelineItem{
-		Kind: "IssueComment", Author: "someone", SortAt: time.Now(),
+		Kind: "comment", Author: "someone", SortAt: time.Now(),
 		Body: strings.Repeat("verylongtokenwithoutspaces", 12) + " " + strings.Repeat("word ", 80),
 	})
 	m = setMainOverview(m, *m.PRDetail)

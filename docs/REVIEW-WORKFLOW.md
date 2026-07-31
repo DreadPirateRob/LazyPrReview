@@ -58,7 +58,7 @@ not reading raw `**asterisks**`, and nothing is cut off at the right edge.
 ```
 #6574  Cj 10354 notification on cade insufficient bal2 with a longer
        title that wraps
-● OPEN   ✓ APPROVED   fazil56   +2873 -89 · 34 files   ✎ 3 draft
+● OPEN   ✓ APPROVED by neethuchalil   fazil56   +2873 -89 · 34 files   ✎ 3 draft
 CJ-10354-notification-on-cade-insufficient-bal2 → master.jul23old
 reviewers DreadPirateRob
 labels release-blocker, Frontend
@@ -73,6 +73,8 @@ JIRA https://example.test/browse/CJ-10354
 ▾ DreadPirateRob  comment · Apr 22 20:30
   ▎ @codex take a look at `notification_service.py`
 
+· neethuchalil  approved · May 15 08:20  ✓
+
 ── Review threads · 3 ──────────────────────────────────────────
 ```
 
@@ -84,16 +86,25 @@ JIRA https://example.test/browse/CJ-10354
 | `b` | Flag the author under the cursor as **bot** or **human** |
 | `t` / `T`, `m` / `M` | Jump to unresolved threads / threads mentioning you |
 
-Three things worth knowing:
+Four things worth knowing:
 
+- **Decisions are attributed.** `✓ APPROVED by <who>` names every reviewer whose
+  latest review approves, and a merged PR reads `✔ MERGED by <who>`. The Status
+  panel's `review:` line says the same.
+- **Human reviews show their outcome.** `alice approved · ✓`, `carol requested
+  changes · ±`, and `bob merged this pull request · ✔` all appear in the
+  conversation — including approvals with no comment text, which used to be
+  invisible. A bodyless event has nothing to unfold, so it gets a `·` marker
+  instead of a fold caret.
 - **Bot runs collapse.** Consecutive comments from one bot become a single row with
   the count, date span, and latest verdict. On a CI-heavy PR that's the difference
   between 15 rows of repeated `✓ Approved` and one. Expand it with `z` to see the
   individual comments, each of which folds on its own.
 - **Bots start collapsed, humans start expanded.** So the human conversation reads
   immediately and the machine noise stays out of the way until you want it.
-- **`✎ 3 draft`** in the header means you have unsubmitted comments waiting — press
-  `S` to submit them.
+
+**`✎ 3 draft`** in the header means you have unsubmitted comments waiting — press
+`S` to submit them.
 
 #### When something isn't classified right
 

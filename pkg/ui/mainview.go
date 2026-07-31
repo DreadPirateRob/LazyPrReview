@@ -427,18 +427,50 @@ func joinOrDash(vs []string) string {
 	return strings.Join(vs, ", ")
 }
 
+// timelineVerb phrases what a timeline event did. The kinds here are the DECODER's
+// vocabulary ("comment" / "review" / "merged", from buildTimeline) — this switch
+// previously matched the GraphQL typenames instead, so every human review fell to
+// the default and rendered without its state: an approval was indistinguishable
+// from a drive-by comment unless the body happened to carry a bot verdict.
 func timelineVerb(it domain.TimelineItem) string {
 	switch it.Kind {
-	case "PullRequestReview":
-		if it.State != "" {
-			return "reviewed (" + it.State + ")"
+	case "review":
+		switch strings.ToUpper(it.State) {
+		case "APPROVED":
+			return "approved"
+		case "CHANGES_REQUESTED":
+			return "requested changes"
+		case "DISMISSED":
+			return "review dismissed"
+		case "COMMENTED", "":
+			return "reviewed"
 		}
-		return "reviewed"
-	case "IssueComment":
+		return "reviewed (" + strings.ToLower(it.State) + ")"
+	case "comment":
 		return "commented"
+	case "merged":
+		return "merged this pull request"
 	default:
 		return orDash(it.Kind)
 	}
+}
+
+// timelineStateGlyph is the collapsed-row signal for review outcomes, using the
+// SPEC §8 vocabulary. Bot verdicts get theirs from the body text; a human approval
+// usually has NO body, so without this the collapsed row carried no outcome at all.
+func timelineStateGlyph(it domain.TimelineItem) string {
+	switch it.Kind {
+	case "review":
+		switch strings.ToUpper(it.State) {
+		case "APPROVED":
+			return ovOpenStyle.Render("✓")
+		case "CHANGES_REQUESTED":
+			return ovClosedStyle.Render("±")
+		}
+	case "merged":
+		return ovMergedStyle.Render("✔")
+	}
+	return ""
 }
 
 func threadStatus(th domain.Thread) string {

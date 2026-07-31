@@ -245,24 +245,37 @@ PR list rows are two lines: line 1 is `[state] #num title` (draft/closed/merged 
 **PR overview composition.** The overview is built as rows (not a flat string), so it
 can fold and be acted on:
 
-1. **Header.** Title; a badge row (`● OPEN`, `✓ APPROVED`, author, `+N -N · N files`,
+1. **Header.** Title; a badge row (`● OPEN`, `✓ APPROVED by alice`, author, `+N -N · N files`,
    and `✎ N draft` when a pending review exists); the branch pair; then a row for each
-   NON-EMPTY `reviewers` / `assignees` / `labels` list. Empty fields are omitted
-   entirely rather than printed as `—`, so the header is as short as the PR allows —
-   typically 4–6 rows against the 8 the old one-field-per-line layout always spent.
-   Every header row **wraps**: the title with a hanging indent so continuations align
-   under the title text, and the three comma-separated lists pack at
+   NON-EMPTY `reviewers` / `assignees` / `labels` list. **Decisions are attributed:**
+   an approved PR names every reviewer whose LATEST review approves (`latestReviews` is
+   one-per-reviewer, so someone who approved and later requested changes is correctly
+   absent), and a merged PR's state badge names who merged it (`✔ MERGED by bob`, from
+   `mergedBy`). The Status panel's `review:` line carries the same attribution. Empty
+   fields are omitted entirely rather than printed as `—`, so the header is as short as
+   the PR allows — typically 4–6 rows against the 8 the old one-field-per-line layout
+   always spent. Every header row **wraps**: the title with a hanging indent so
+   continuations align under the title text, and the three comma-separated lists pack at
    ITEM boundaries so a hyphenated name like `release-blocker` is never split. At any
    usable width the header wraps rather than truncates — the title is the most identifying
    text on screen. (Below roughly 8 usable columns both helpers fall back to flat
    emission, and the pane clips as a last resort; there is no layout that fits there.)
 2. **`── Description ──`** — the PR body, markdown-rendered.
-3. **`── Conversation · N (N human · N bot) ──`** — the timeline. Consecutive comments
-   from the same bot collapse into ONE foldable row reporting the count, date span and
-   latest verdict (`▸ github-actions · 5 comments · Apr 07 – Apr 21 · latest ✓ Approved`);
-   expanding it reveals the members, each independently foldable. **Bot comments default
-   collapsed, human comments default expanded** — a CI-heavy PR is otherwise mostly
-   repeated verdicts.
+3. **`── Conversation · N (N human · N bot) ──`** — the timeline: issue comments, each
+   reviewer's latest submitted review, and the merge event (synthesized from the PR's
+   own `mergedBy`/`mergedAt` — a single event the PR already carries; no extra query
+   page). Review rows phrase their STATE (`alice approved · ✓`, `carol requested
+   changes · ±`), which is what makes a human approval visible at all: a bot's verdict
+   lives in its body text, a human's lives in the review state, and the old renderer
+   only ever showed the former. Timeline kinds are the decoder's vocabulary
+   (`comment` / `review` / `merged`). An event with NO body — a bodyless approval, the
+   merge event — renders a `·` marker instead of a fold caret and carries no fold key:
+   there is nothing to reveal. Consecutive comments from the same bot collapse into ONE
+   foldable row reporting the count, date span and latest verdict
+   (`▸ github-actions · 5 comments · Apr 07 – Apr 21 · latest ✓ Approved`); expanding it
+   reveals the members, each independently foldable. **Bot comments default collapsed,
+   human comments default expanded** — a CI-heavy PR is otherwise mostly repeated
+   verdicts.
 4. **`── Review threads · N ──`** — the review threads, folding by THREAD ID, i.e. the
    same key the inline diff blocks use, so a thread folded in one view is folded in both.
 

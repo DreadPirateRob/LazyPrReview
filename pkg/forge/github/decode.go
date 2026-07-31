@@ -370,6 +370,8 @@ type pullRequestData struct {
 	ChangedFiles   int                     `json:"changedFiles"`
 	Mergeable      string                  `json:"mergeable"`
 	ReviewDecision string                  `json:"reviewDecision"`
+	MergedAt       *time.Time              `json:"mergedAt"`
+	MergedBy       loginWrapper            `json:"mergedBy"`
 	Labels         labelConnection         `json:"labels"`
 	Files          fileConnection          `json:"files"`
 	ReviewThreads  threadConnection        `json:"reviewThreads"`
@@ -547,7 +549,7 @@ func buildPRDetail(
 	}
 
 	// Timeline: merge issue comments + submitted latest reviews, sorted by time.
-	timeline := buildTimeline(pr.Comments.Nodes, pr.LatestReviews.Nodes)
+	timeline := buildTimeline(pr.Comments.Nodes, pr.LatestReviews.Nodes, pr.MergedBy.Login, pr.MergedAt)
 
 	pendingReviewCount := 0
 	if pendingReview != nil {
@@ -573,6 +575,7 @@ func buildPRDetail(
 		ChangedFiles:              pr.ChangedFiles,
 		Mergeable:                 pr.Mergeable,
 		ReviewDecision:            pr.ReviewDecision,
+		MergedBy:                  pr.MergedBy.Login,
 		Labels:                    labels,
 		Files:                     domainFiles,
 		Threads:                   domainThreads,
@@ -620,10 +623,14 @@ func contextToCheck(ctx checkContextNode) domain.Check {
 	}
 }
 
-// buildTimeline merges issue comments and submitted latest reviews into one
-// chronological list, as defined in SPEC §9.
-func buildTimeline(comments []issueCommentNode, reviews []latestReviewNode) []domain.TimelineItem {
-	items := make([]domain.TimelineItem, 0, len(comments)+len(reviews))
+// buildTimeline merges issue comments, submitted latest reviews and the merge
+// event into one chronological list, as defined in SPEC §9.
+//
+// The merge is synthesized from the PR's own mergedBy/mergedAt fields rather than
+// fetched as a timeline connection — it is a single event whose identity the PR
+// already carries, and a second query page would buy nothing.
+func buildTimeline(comments []issueCommentNode, reviews []latestReviewNode, mergedBy string, mergedAt *time.Time) []domain.TimelineItem {
+	items := make([]domain.TimelineItem, 0, len(comments)+len(reviews)+1)
 	for _, c := range comments {
 		items = append(items, domain.TimelineItem{
 			Kind:   "comment",
@@ -643,6 +650,13 @@ func buildTimeline(comments []issueCommentNode, reviews []latestReviewNode) []do
 			Author: r.Author.Login,
 			Body:   r.Body,
 			State:  r.State,
+		})
+	}
+	if mergedAt != nil {
+		items = append(items, domain.TimelineItem{
+			Kind:   "merged",
+			SortAt: *mergedAt,
+			Author: mergedBy,
 		})
 	}
 	sort.Slice(items, func(i, j int) bool {

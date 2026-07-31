@@ -583,12 +583,40 @@ func TestBuildTimelineSkipsPendingReviews(t *testing.T) {
 		{Author: loginWrapper{"alice"}, State: "APPROVED", SubmittedAt: &submitted, Body: "lgtm"},
 		{Author: loginWrapper{"bob"}, State: "PENDING", SubmittedAt: nil, Body: "draft"},
 	}
-	timeline := buildTimeline(nil, reviews)
+	timeline := buildTimeline(nil, reviews, "", nil)
 	if len(timeline) != 1 {
 		t.Fatalf("timeline length = %d, want 1 (PENDING review skipped)", len(timeline))
 	}
 	if timeline[0].Author != "alice" {
 		t.Errorf("unexpected author: %q", timeline[0].Author)
+	}
+	if timeline[0].Kind != "review" || timeline[0].State != "APPROVED" {
+		t.Errorf("review item should carry kind/state, got %q/%q", timeline[0].Kind, timeline[0].State)
+	}
+}
+
+// A merged PR contributes one synthesized timeline event carrying who merged it,
+// sorted into place by mergedAt.
+func TestBuildTimelineIncludesMergeEvent(t *testing.T) {
+	reviewed := time.Date(2024, 1, 2, 10, 0, 0, 0, time.UTC)
+	merged := time.Date(2024, 1, 3, 9, 0, 0, 0, time.UTC)
+	reviews := []latestReviewNode{
+		{Author: loginWrapper{"alice"}, State: "APPROVED", SubmittedAt: &reviewed},
+	}
+	timeline := buildTimeline(nil, reviews, "bob", &merged)
+	if len(timeline) != 2 {
+		t.Fatalf("timeline length = %d, want 2", len(timeline))
+	}
+	last := timeline[1]
+	if last.Kind != "merged" || last.Author != "bob" {
+		t.Fatalf("merge event should close the timeline, got kind=%q author=%q", last.Kind, last.Author)
+	}
+	if !last.SortAt.Equal(merged) {
+		t.Fatalf("merge event should sort at mergedAt, got %v", last.SortAt)
+	}
+
+	if open := buildTimeline(nil, reviews, "", nil); len(open) != 1 {
+		t.Fatalf("an open PR must not synthesize a merge event, got %d items", len(open))
 	}
 }
 

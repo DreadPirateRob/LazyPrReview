@@ -108,24 +108,27 @@ type PRSummary struct {
 }
 
 type PRDetail struct {
-	ID                        string
-	Number                    int
-	Title                     string
-	Body                      string
-	State                     string
-	IsDraft                   bool
-	URL                       string
-	CreatedAt                 time.Time
-	UpdatedAt                 time.Time
-	Author                    string
-	BaseRefName               string
-	HeadRefName               string
-	HeadRefOID                string
-	Additions                 int
-	Deletions                 int
-	ChangedFiles              int
-	Mergeable                 string
-	ReviewDecision            string
+	ID             string
+	Number         int
+	Title          string
+	Body           string
+	State          string
+	IsDraft        bool
+	URL            string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	Author         string
+	BaseRefName    string
+	HeadRefName    string
+	HeadRefOID     string
+	Additions      int
+	Deletions      int
+	ChangedFiles   int
+	Mergeable      string
+	ReviewDecision string
+	// MergedBy is the login that merged the PR, or "" while it is open — the
+	// header badge and the synthesized timeline merge event both read it.
+	MergedBy                  string
 	Labels                    []Label
 	Files                     []ChangedFile
 	Threads                   []Thread
