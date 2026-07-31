@@ -252,11 +252,13 @@ func highlightSourceLines(lex chroma.Lexer, sty *chroma.Style, lines []string) [
 		return nil
 	}
 
-	// terminal256 may append a trailing "\x1b[0m\n" reset after the last
-	// newline. TrimRight removes bare newlines; the loop below strips any
-	// remaining trailing elements whose visible content is empty.
-	raw := strings.TrimRight(buf.String(), "\n")
-	split := strings.Split(raw, "\n")
+	// Do NOT TrimRight newlines here: when the source's LAST line is blank, the
+	// final "\n" is the only thing representing it, and trimming it made the count
+	// check below fail — which silently un-highlighted every hunk that ends in a
+	// blank line. The formatter's output splits 1:1 with the source as-is; the loop
+	// only drops genuinely surplus trailing elements (e.g. a dangling reset after
+	// the last newline) that carry no visible content.
+	split := strings.Split(buf.String(), "\n")
 	for len(split) > len(lines) {
 		last := split[len(split)-1]
 		if ansi.Strip(last) != "" {

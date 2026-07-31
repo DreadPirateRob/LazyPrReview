@@ -467,3 +467,42 @@ func syntheticGoDiff(totalLines int) diff.File {
 	}
 	return files[0]
 }
+
+// The reported bug: a hunk whose LAST line is blank lost highlighting for the WHOLE
+// hunk, while later hunks in the same file stayed highlighted. highlightSourceLines
+// trimmed trailing newlines from chroma's output before the line-count check, and
+// when the last source line is blank that final newline is the only thing
+// representing it — so the count came up one short and the hunk fell back to raw.
+// Import blocks routinely end in a blank separator line, which is exactly where it
+// was noticed.
+func TestDiffHighlightSurvivesBlankTrailingLine(t *testing.T) {
+	file := parseTestDiff(t, "diff --git a/x.tsx b/x.tsx\n--- a/x.tsx\n+++ b/x.tsx\n"+
+		"@@ -1,4 +1,5 @@\n"+
+		" import { Box } from '@mui/material';\n"+
+		"+import { useTranslation } from 'react-i18next';\n"+
+		" \n"+
+		" import MuiSelect from 'components/MuiComponents/MuiSelect';\n"+
+		" \n")
+	hl := highlightedDiffLines(file)
+
+	var lit int
+	for i, l := range file.Rendered {
+		switch l.Kind {
+		case diff.LineKindContext, diff.LineKindAdd:
+			if l.Text == "" {
+				continue // blank lines have nothing to colour
+			}
+			if hl[i] != "" && ansi.Strip(hl[i]) != hl[i] {
+				lit++
+			}
+		}
+	}
+	if lit == 0 {
+		t.Skip("colour profile emits no styling; nothing to assert")
+	}
+	// Every non-blank content line must be highlighted — the bug dropped ALL of them.
+	want := 3 // two imports + the added import
+	if lit != want {
+		t.Fatalf("a hunk ending in a blank line must stay highlighted: %d of %d lines lit", lit, want)
+	}
+}
