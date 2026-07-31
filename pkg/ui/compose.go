@@ -401,8 +401,7 @@ func rebuildWithOptimistic(m Model) Model {
 	if m.MainMode == MainOverview {
 		d := *m.PRDetail
 		d.Threads = threads
-		m = setMainLines(m, composePROverview(d))
-		return m
+		return setMainOverview(m, d)
 	}
 	// A file diff renders threads inline, so it has to be rebuilt too or a new
 	// draft stays invisible until the reader leaves and re-enters the file.

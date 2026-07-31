@@ -123,10 +123,16 @@ type Model struct {
 	// Cleared by setMainLines, so overview / commit / directory / pager content
 	// leaves it nil and every line-scoped action is inert there by construction.
 	MainRows []mainRow
-	// ThreadFolded overrides a thread's default expansion in the inline diff
-	// (unresolved open, resolved/outdated collapsed). Copy-on-write, since a Model
-	// is passed by value everywhere.
-	ThreadFolded  map[string]bool
+	// Folded overrides default expansion for anything foldable in Main: inline diff
+	// threads (keyed by thread ID) and overview timeline rows (keyed by the
+	// synthetic keys in overview.go, since timeline items have no server ID).
+	// Copy-on-write, since a Model is passed by value everywhere.
+	Folded map[string]bool
+	// AuthorRoles holds the user's persisted bot/human overrides, keyed by
+	// lowercased login. Loaded at startup and rewritten whenever the user flags an
+	// author, so the built-in bot list is only a default. Copy-on-write, since a
+	// Model is passed by value everywhere.
+	AuthorRoles   map[string]config.AuthorRole
 	MainMode      MainMode
 	MainFileIndex int
 	// MainDirPath names the directory whose aggregate diff Main is showing, or ""
@@ -241,3 +247,9 @@ type resolveResultMsg struct {
 // spinnerTickMsg advances the loading spinner. It is only rescheduled while the
 // full-screen loading view is active, so it never churns renders in normal UI.
 type spinnerTickMsg struct{}
+
+// authorRolesSavedMsg reports the result of persisting author bot/human flags.
+// Success is silent — the UI already applied the flag optimistically.
+type authorRolesSavedMsg struct {
+	Err error
+}

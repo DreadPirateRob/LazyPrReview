@@ -7,6 +7,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/DreadPirateRob/LazyPrReview/pkg/config"
 	"github.com/DreadPirateRob/LazyPrReview/pkg/domain"
 	"github.com/DreadPirateRob/LazyPrReview/pkg/forge"
@@ -530,27 +532,68 @@ func TestPROverviewShowsMetadataAndConversation(t *testing.T) {
 			},
 		},
 	}
-	out := strings.Join(composePROverview(d), "\n")
+	m := New(config.Default(), nil)
+	m.Width, m.Height = 120, 40
+	m.PRDetail = &d
+	m = setMainOverview(m, d)
+	out := ansi.Strip(strings.Join(m.MainLines, "\n"))
 
 	wants := []string{
 		"#7  Add retries",
-		"branch: feat/retries  →  main",
-		"review: APPROVED · PENDING (2 draft comment(s))",
-		"reviewers: bob, @backend",
-		"assignees: carol",
-		"labels: bug, p1",
+		"● OPEN",              // state badge, not "OPEN · by alice"
+		"✓ APPROVED",          // review decision badge
+		"alice",               // author moved into the badge row
+		"+10 -2 · 3 files",    // change counts
+		"✎ 2 draft",           // pending-review signal must survive header compression
+		"feat/retries → main", // compact branch row
+		"reviewers bob, @backend",
+		"assignees carol",
+		"labels bug, p1",
+		"Description",
 		"First line",
 		"Second line",
-		"Conversation (2)",
-		"dave · commented",
-		"erin · reviewed (APPROVED)",
+		"Conversation · 2",
+		"dave",
+		"erin",
+		"Review threads · 1",
 		"foo.go:12",
-		"please rename this",
+		"please rename this", // human threads default expanded
 		"done",
 	}
 	for _, w := range wants {
 		if !strings.Contains(out, w) {
 			t.Fatalf("overview missing %q in:\n%s", w, out)
+		}
+	}
+
+	// Empty fields are dropped rather than printed as an em dash.
+	if strings.Contains(out, "—") {
+		t.Errorf("empty metadata should be omitted, not dashed:\n%s", out)
+	}
+}
+
+// Every overview line must fit the pane budget: the old builder emitted raw
+// unwrapped bodies that got clipped at the right edge.
+func TestPROverviewRespectsWidth(t *testing.T) {
+	m := New(config.Default(), nil)
+	m.Width, m.Height = 100, 40
+	d := domain.PRDetail{
+		Number: 1, Title: "wide", State: "OPEN",
+		Body: strings.Repeat("lorem ipsum dolor sit amet ", 20),
+		Timeline: []domain.TimelineItem{
+			{Kind: "IssueComment", Author: "dave", Body: strings.Repeat("chatter ", 60)},
+		},
+	}
+	m.PRDetail = &d
+	m = setMainOverview(m, d)
+
+	budget := mainContentWidth(m)
+	if budget <= 0 {
+		t.Fatal("expected a positive content budget")
+	}
+	for i, l := range m.MainLines {
+		if w := ansi.StringWidth(l); w > budget {
+			t.Fatalf("line %d is %d cols, budget %d: %q", i, w, budget, ansi.Strip(l))
 		}
 	}
 }

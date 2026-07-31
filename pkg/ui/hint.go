@@ -57,13 +57,16 @@ func hintEntries(ctx string) []hintEntry {
 	// truncated, which silently drops ARBITRARY entries — so niche bindings are
 	// demoted explicitly here and stay fully documented in `?` help.
 	//
-	// Demoted: `zz` centering (a vim-ism power users know) and the REVERSE half of
-	// the thread/mention navigation pairs — once `t` and `m` are visible, `T`/`M`
-	// follow the universal shift-reverses convention (n/N, t/T).
+	// Demoted: `zz` centering (a vim-ism power users know), the REVERSE half of the
+	// thread/mention navigation pairs (once `t` and `m` are visible, `T`/`M` follow
+	// the universal shift-reverses convention), and overview fold-all, which mirrors
+	// keys the Files panel already teaches.
 	demoted := map[string]bool{
 		"centerCursor":         true,
 		"prevUnresolvedThread": true,
 		"prevMention":          true,
+		"collapseAllOverview":  true,
+		"expandAllOverview":    true,
 	}
 	if ctx != "universal" {
 		for _, a := range all {

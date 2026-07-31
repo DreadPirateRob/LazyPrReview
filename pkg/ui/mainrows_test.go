@@ -10,7 +10,7 @@ import (
 // rowsFor renders foo.txt (fixture index 0) and returns the parallel lines/rows.
 func rowsFor(t *testing.T, m Model) ([]string, []mainRow) {
 	t.Helper()
-	lines, rows := buildDiffRows(m, 0)
+	lines, rows := buildDiffRows(m, 0, 100)
 	if len(lines) != len(rows) {
 		t.Fatalf("lines and rows must stay parallel: %d vs %d", len(lines), len(rows))
 	}
@@ -128,7 +128,7 @@ func TestThreadFoldOverridesDefault(t *testing.T) {
 	m := seededModel(t)
 
 	// Collapse an unresolved thread.
-	m.ThreadFolded = map[string]bool{"t1": true}
+	m.Folded = map[string]bool{"t1": true}
 	lines, _ := rowsFor(t, m)
 	if strings.Contains(strings.Join(lines, "\n"), "first thread") {
 		t.Fatal("folding an unresolved thread should hide its comments")
@@ -138,7 +138,7 @@ func TestThreadFoldOverridesDefault(t *testing.T) {
 	m2 := seededModel(t)
 	m2.PRDetail.Threads[0].IsResolved = true
 	m2.AnchoredThreads, m2.UnresolvedThreadIndex = buildAnchors(m2.PRDetail, m2.DiffFiles)
-	m2.ThreadFolded = map[string]bool{"t1": false}
+	m2.Folded = map[string]bool{"t1": false}
 	lines2, _ := rowsFor(t, m2)
 	if !strings.Contains(strings.Join(lines2, "\n"), "first thread") {
 		t.Fatal("unfolding a resolved thread should reveal its comments")

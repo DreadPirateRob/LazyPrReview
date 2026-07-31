@@ -69,11 +69,29 @@ func UpdateMain(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			return centerMainCursor(m), nil
 		}
 	} else if ks == "z" {
-		if id := threadRowID(m); id != "" {
-			return toggleThreadFold(m, id), nil
+		// Fold whatever is foldable under the cursor: an inline diff thread block, or
+		// an overview comment / bot run. Plain prose and code rows fall through so
+		// `zz` centering still works everywhere else.
+		if key := foldTargetKey(m); key != "" {
+			if m.MainMode == MainOverview {
+				return toggleOverviewFold(m, key), nil
+			}
+			return toggleThreadFold(m, key), nil
 		}
 		m.MainPendingZ = true
 		return m, nil
+	}
+
+	// Collapse / expand every foldable overview row. Same keys and meaning as the
+	// Files tree, so the idiom carries over.
+	if m.MainMode == MainOverview && (ks == "-" || ks == "=") && m.PRDetail != nil {
+		return setAllOverviewFolds(m, ks == "-"), nil
+	}
+
+	// Flag the comment author under the cursor as bot/human. Overview only: it acts
+	// on a comment, and a diff has none.
+	if m.MainMode == MainOverview && ks == "b" {
+		return toggleAuthorRole(m)
 	}
 
 	switch ks {
@@ -335,114 +353,42 @@ func cycleThreadJump(m Model, delta int) Model {
 	return jumpToAnchoredThread(m, m.UnresolvedThreadIndex[next], false)
 }
 
-// composePROverview builds a GitHub-PR-style overview for the Main pane: a
-// header with branch/target, reviewers, assignees, labels and review status,
-// followed by the description and the full conversation (timeline + review
-// threads). The viewport makes the whole thing scrollable.
 var draftStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("6")) // cyan [draft]
 
-func composePROverview(d domain.PRDetail) []string {
-	out := []string{}
-	add := func(s string) { out = append(out, s) }
-	rule := strings.Repeat("─", 60)
-
-	state := d.State
-	if d.IsDraft {
-		state = "DRAFT"
-	}
-	add(fmt.Sprintf("#%d  %s", d.Number, d.Title))
-	add(fmt.Sprintf("%s · by %s", orDash(state), orDash(d.Author)))
-	add(fmt.Sprintf("branch: %s  →  %s", orDash(d.HeadRefName), orDash(d.BaseRefName)))
-	add(fmt.Sprintf("changes: +%d -%d · %d files", d.Additions, d.Deletions, d.ChangedFiles))
-	add("review: " + reviewStatusLine(d))
-	add("reviewers: " + reviewerNames(d.RequestedReviewers))
-	add("assignees: " + joinOrDash(d.Assignees))
-	add("labels: " + labelNames(d.Labels))
-
-	add(rule)
-	add("Description")
-	body := strings.TrimRight(d.Body, "\n")
-	if strings.TrimSpace(body) == "" {
-		add("(no description)")
-	} else {
-		for _, l := range strings.Split(body, "\n") {
-			add(l)
+// reviewerList returns reviewer display names in order, teams prefixed with @.
+// The joined form below is built on this so both share one ordering.
+func reviewerList(rs []domain.RequestedReviewer) []string {
+	out := make([]string, len(rs))
+	for i, r := range rs {
+		if r.Kind == "team" {
+			out[i] = "@" + r.Name
+		} else {
+			out[i] = r.Name
 		}
 	}
-
-	add(rule)
-	add(fmt.Sprintf("Conversation (%d)", len(d.Timeline)))
-	if len(d.Timeline) == 0 {
-		add("(no comments yet)")
-	}
-	for _, it := range d.Timeline {
-		add("")
-		add(fmt.Sprintf("%s · %s · %s", orDash(it.Author), timelineVerb(it), it.SortAt.Format("2006-01-02 15:04")))
-		writeIndentedBody(add, it.Body, it.State)
-	}
-
-	if len(d.Threads) > 0 {
-		add(rule)
-		add(fmt.Sprintf("Review threads (%d)", len(d.Threads)))
-		for _, th := range d.Threads {
-			add("")
-			loc := th.Path
-			if th.Line != nil {
-				loc = fmt.Sprintf("%s:%d", th.Path, *th.Line)
-			}
-			draft := ""
-			if threadHasDraft(th) {
-				draft = draftStyle.Render(" [draft]")
-			}
-			add(fmt.Sprintf("%s  [%s]%s", orDash(loc), threadStatus(th), draft))
-			for _, c := range th.Comments {
-				add(fmt.Sprintf("  %s:", orDash(c.Author)))
-				b := strings.TrimRight(c.Body, "\n")
-				for _, l := range strings.Split(b, "\n") {
-					add("    " + l)
-				}
-			}
-		}
-	}
-
 	return out
-}
-
-func reviewStatusLine(d domain.PRDetail) string {
-	status := d.ReviewDecision
-	if status == "" {
-		status = "REVIEW_REQUIRED"
-	}
-	if d.PendingReviewCount > 0 {
-		status += fmt.Sprintf(" · PENDING (%d draft comment(s))", d.PendingReviewCount)
-	}
-	return status
 }
 
 func reviewerNames(rs []domain.RequestedReviewer) string {
 	if len(rs) == 0 {
 		return "—"
 	}
-	names := make([]string, len(rs))
-	for i, r := range rs {
-		if r.Kind == "team" {
-			names[i] = "@" + r.Name
-		} else {
-			names[i] = r.Name
-		}
+	return strings.Join(reviewerList(rs), ", ")
+}
+
+func labelList(ls []domain.Label) []string {
+	out := make([]string, len(ls))
+	for i, l := range ls {
+		out[i] = l.Name
 	}
-	return strings.Join(names, ", ")
+	return out
 }
 
 func labelNames(ls []domain.Label) string {
 	if len(ls) == 0 {
 		return "—"
 	}
-	names := make([]string, len(ls))
-	for i, l := range ls {
-		names[i] = l.Name
-	}
-	return strings.Join(names, ", ")
+	return strings.Join(labelList(ls), ", ")
 }
 
 func joinOrDash(vs []string) string {
@@ -474,19 +420,6 @@ func threadStatus(th domain.Thread) string {
 		return "outdated"
 	default:
 		return "unresolved"
-	}
-}
-
-func writeIndentedBody(add func(string), body, state string) {
-	b := strings.TrimRight(body, "\n")
-	if strings.TrimSpace(b) == "" {
-		if state != "" {
-			add("  (" + strings.ToLower(state) + ")")
-		}
-		return
-	}
-	for _, l := range strings.Split(b, "\n") {
-		add("  " + l)
 	}
 }
 

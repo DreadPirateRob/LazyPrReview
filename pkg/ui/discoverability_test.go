@@ -15,7 +15,7 @@ func TestHintBarSurfacesAuthoringKeys(t *testing.T) {
 		focus FocusContext
 		want  []string
 	}{
-		{FocusMain, []string{"c Comment", "v Range"}},
+		{FocusMain, []string{"c Comment", "v Range", "b Bot?"}},
 		{FocusFiles, []string{"c Comment"}},
 		{FocusThreads, []string{"<space> Resolve"}},
 		{FocusThread, []string{"r Reply", "e Edit", "d Delete"}},
@@ -49,7 +49,13 @@ func TestScopedHelpSurfacesAuthoringActions(t *testing.T) {
 
 	m.FocusStack = []FocusContext{FocusMain}
 	help := helpOverlayView(m)
-	for _, want := range []string{"submitReview", "commentLine", "rangeSelect"} {
+	// Includes the keys demoted from the hint bar for width: `?` help is the ONLY
+	// place they surface, so this is what stops them becoming hidden bindings.
+	for _, want := range []string{
+		"submitReview", "commentLine", "rangeSelect", "toggleAuthorBot",
+		"toggleThreadFold", "collapseAllOverview", "expandAllOverview",
+		"centerCursor", "prevUnresolvedThread", "prevMention",
+	} {
 		if !strings.Contains(help, want) {
 			t.Errorf("main-scoped help missing %q", want)
 		}

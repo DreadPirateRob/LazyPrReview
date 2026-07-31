@@ -24,18 +24,37 @@ const (
 	rowCode                            // a diff line; RenderIndex points into File.Rendered
 	rowThreadHeader                    // a thread's summary line (fold target)
 	rowComment                         // one line of one comment's author/body
+
+	// Overview kinds. The overview is prose, not code, so it has no RenderIndex —
+	// its foldable rows are identified by Key instead.
+	rowMeta        // PR title / metadata line
+	rowSection     // a section rule ("Description", "Conversation …")
+	rowEventHeader // one timeline comment's summary line (fold target)
+	rowEventBody   // one line of a timeline comment's rendered body
+	rowGroupHeader // a collapsed run of bot comments (fold target)
 )
 
-// mainRow is the metadata for a single Main line. It is populated ONLY for the
-// built-in single-file diff — exactly the mode where a line anchor is meaningful.
-// The PR overview, commit-scoped diffs, directory aggregates, and external-pager
-// output all leave Model.MainRows nil, which keeps every line-scoped action inert
-// in those modes by construction rather than by scattered guards.
+// mainRow is the metadata for a single Main line, populated for the built-in
+// single-file diff and for the PR overview — the two modes with structure worth
+// addressing. Commit-scoped diffs, directory aggregates, and external-pager output
+// leave Model.MainRows nil.
+//
+// Line-scoped DIFF actions additionally gate on MainMode == MainDiff, so overview
+// rows can never be mistaken for a code anchor.
 type mainRow struct {
 	Kind        mainRowKind
 	RenderIndex int    // rowCode only; -1 otherwise
 	ThreadID    string // rowThreadHeader / rowComment
 	CommentIdx  int    // rowComment: index into Thread.Comments
+	// Key identifies a foldable overview row across rebuilds. Timeline items carry
+	// no server ID, so folding by row index would scramble the moment the content
+	// is rebuilt (a draft lands, a refetch arrives, the pane resizes). See
+	// timelineKey / groupKey.
+	Key string
+	// Author is the comment author for overview event/group rows, so acting on the
+	// row (flagging a bot) works from a stable identity instead of re-deriving it
+	// from rendered text, which grouping and markdown make unreliable.
+	Author string
 }
 
 var (
@@ -52,7 +71,7 @@ var (
 // threads default open and settled (resolved/outdated) ones default collapsed to
 // their summary line; an explicit fold toggle overrides either default.
 func threadExpanded(m Model, th domain.Thread) bool {
-	if folded, ok := m.ThreadFolded[th.ID]; ok {
+	if folded, ok := m.Folded[th.ID]; ok {
 		return !folded
 	}
 	return !th.IsResolved && !th.IsOutdated
@@ -63,7 +82,7 @@ func threadExpanded(m Model, th domain.Thread) bool {
 // to. Threads that do not map to a diff line (file-level comments, and outdated
 // threads whose line is gone) would otherwise be invisible here, so they are
 // emitted right below the file header.
-func buildDiffRows(m Model, idx int) ([]string, []mainRow) {
+func buildDiffRows(m Model, idx int, width int) ([]string, []mainRow) {
 	if idx < 0 || idx >= len(m.DiffFiles) {
 		return nil, nil
 	}
@@ -91,12 +110,12 @@ func buildDiffRows(m Model, idx int) ([]string, []mainRow) {
 
 	add(diffHeaderStyle.Render("File: "+file.Path), mainRow{Kind: rowFileHeader, RenderIndex: -1})
 	for _, at := range unanchored {
-		appendThreadBlock(m, at, add)
+		appendThreadBlock(m, at, width, add)
 	}
 	for _, line := range file.Rendered {
 		add(renderDiffLine(line), mainRow{Kind: rowCode, RenderIndex: line.RenderIndex})
 		for _, at := range byAnchor[line.RenderIndex] {
-			appendThreadBlock(m, at, add)
+			appendThreadBlock(m, at, width, add)
 		}
 	}
 	return lines, rows
@@ -105,7 +124,7 @@ func buildDiffRows(m Model, idx int) ([]string, []mainRow) {
 // appendThreadBlock emits one thread: a summary line, then its comments when
 // expanded. Every emitted line carries the thread id so the cursor can act on the
 // thread from any row of the block.
-func appendThreadBlock(m Model, at diff.AnchoredThread, add func(string, mainRow)) {
+func appendThreadBlock(m Model, at diff.AnchoredThread, width int, add func(string, mainRow)) {
 	th := at.Thread
 	expanded := threadExpanded(m, th)
 	add(threadGutter+threadSummary(m, at, expanded), mainRow{
@@ -121,10 +140,11 @@ func appendThreadBlock(m Model, at diff.AnchoredThread, add func(string, mainRow
 			head += draftStyle.Render(" [draft]")
 		}
 		add(threadGutter+head+":", row)
-		for _, l := range strings.Split(strings.TrimRight(c.Body, "\n"), "\n") {
-			// Mentions are styled before any wrapper styling, while the line is
-			// still plain text, so no escape sequences get mangled.
-			add(threadGutter+"  "+highlightMentions(l, m.ViewerLogin), row)
+		// Comment bodies are markdown and get the same treatment as the overview:
+		// rendered and wrapped to the remaining budget. Emitting raw split lines here
+		// showed literal ** and clipped long lines at the pane edge.
+		for _, l := range renderMarkdownFor(c.Body, width-4, m.ViewerLogin) {
+			add(threadGutter+"  "+l, row)
 		}
 	}
 }
@@ -219,7 +239,7 @@ func setMainDiff(m Model, idx int) Model {
 			return setMainLines(m, lines)
 		}
 	}
-	lines, rows := buildDiffRows(m, idx)
+	lines, rows := buildDiffRows(m, idx, mainContentWidth(m))
 	m = setMainLines(m, lines)
 	m.MainRows = rows // after setMainLines, which clears it
 	return m
@@ -308,11 +328,157 @@ func toggleThreadFold(m Model, threadID string) Model {
 			break
 		}
 	}
-	next := make(map[string]bool, len(m.ThreadFolded)+1)
-	for k, v := range m.ThreadFolded {
+	next := make(map[string]bool, len(m.Folded)+1)
+	for k, v := range m.Folded {
 		next[k] = v
 	}
 	next[threadID] = expanded // was expanded → now folded
-	m.ThreadFolded = next
+	m.Folded = next
 	return refreshMainDiff(m)
+}
+
+// foldTargetKey returns the fold identity of the row under the cursor, or "".
+// Diff thread rows fold by thread ID; overview rows fold by their synthetic Key
+// (timeline items carry no server ID). Both live in Model.Folded.
+func foldTargetKey(m Model) string {
+	r, ok := rowAt(m, m.MainCursor)
+	if !ok {
+		return ""
+	}
+	switch r.Kind {
+	case rowThreadHeader, rowComment:
+		return r.ThreadID
+	case rowEventHeader, rowEventBody, rowGroupHeader:
+		return r.Key
+	}
+	return ""
+}
+
+// toggleOverviewFold flips one overview row's expansion and rebuilds, keeping the
+// cursor on the same row by Key — folding changes the row count, so a raw index
+// would drift onto unrelated content.
+func toggleOverviewFold(m Model, key string) Model {
+	if m.PRDetail == nil || key == "" {
+		return m
+	}
+	next := make(map[string]bool, len(m.Folded)+1)
+	for k, v := range m.Folded {
+		next[k] = v
+	}
+	// Record the flip explicitly: the default depends on whether the author is a
+	// bot, so absence cannot be negated.
+	next[key] = !m.Folded[key]
+	if _, had := m.Folded[key]; !had {
+		next[key] = isExpandedNow(m, key)
+	}
+	m.Folded = next
+
+	scroll := m.MainScroll
+	d := *m.PRDetail
+	d.Threads = effectiveThreads(m)
+	m = setMainOverview(m, d)
+	if line := mainLineForKey(m, key); line >= 0 {
+		m.MainCursor = line
+	}
+	if m.MainCursor > len(m.MainLines)-1 {
+		m.MainCursor = maxInt(0, len(m.MainLines)-1)
+	}
+	m.MainScroll = scroll
+	return m
+}
+
+// isExpandedNow reports a foldable overview row's CURRENT visible state, so the
+// first toggle inverts what the reader actually sees rather than a default.
+func isExpandedNow(m Model, key string) bool {
+	for _, r := range m.MainRows {
+		if r.Key != key {
+			continue
+		}
+		switch r.Kind {
+		case rowEventHeader, rowGroupHeader:
+			// A header followed by body rows for the same key is expanded.
+			return mainKeyHasBody(m, key)
+		}
+	}
+	return false
+}
+
+func mainKeyHasBody(m Model, key string) bool {
+	for _, r := range m.MainRows {
+		if r.Key == key && r.Kind == rowEventBody {
+			return true
+		}
+	}
+	return false
+}
+
+// mainLineForKey finds the summary row for a fold key, or -1.
+func mainLineForKey(m Model, key string) int {
+	for i, r := range m.MainRows {
+		if r.Key == key && (r.Kind == rowEventHeader || r.Kind == rowGroupHeader) {
+			return i
+		}
+	}
+	return -1
+}
+
+// allOverviewFoldKeys enumerates every foldable key the overview CAN have, derived
+// from the data rather than the current rows.
+//
+// Reading the visible row model instead would make fold-all state-dependent: a
+// collapsed bot run only exposes its group key, so "expand all" would open the run
+// and leave its members shut — the reader presses = and still sees no bodies.
+func allOverviewFoldKeys(m Model, d domain.PRDetail) []string {
+	keys := make([]string, 0, len(d.Timeline)+len(d.Threads)+4)
+	for i := 0; i < len(d.Timeline); {
+		it := d.Timeline[i]
+		keys = append(keys, timelineKey(it))
+		if !isBotAuthor(m, it.Author) {
+			i++
+			continue
+		}
+		j := i
+		for j < len(d.Timeline) && d.Timeline[j].Author == it.Author {
+			j++
+		}
+		if j-i > 1 {
+			keys = append(keys, groupKey(it))
+			for _, member := range d.Timeline[i+1 : j] {
+				keys = append(keys, timelineKey(member))
+			}
+		}
+		i = j
+	}
+	for _, th := range d.Threads {
+		keys = append(keys, th.ID)
+	}
+	return keys
+}
+
+// setAllOverviewFolds collapses or expands every foldable row in the overview.
+func setAllOverviewFolds(m Model, folded bool) Model {
+	if m.PRDetail == nil {
+		return m
+	}
+	d := *m.PRDetail
+	d.Threads = effectiveThreads(m)
+
+	next := make(map[string]bool, len(m.Folded)+len(d.Timeline))
+	for k, v := range m.Folded {
+		next[k] = v
+	}
+	for _, k := range allOverviewFoldKeys(m, d) {
+		next[k] = folded
+	}
+	m.Folded = next
+
+	cursorKey := foldTargetKey(m)
+	m = setMainOverview(m, d)
+	if line := mainLineForKey(m, cursorKey); line >= 0 {
+		m.MainCursor = line
+	}
+	if m.MainCursor > len(m.MainLines)-1 {
+		m.MainCursor = maxInt(0, len(m.MainLines)-1)
+	}
+	return m
 }

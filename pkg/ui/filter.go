@@ -66,6 +66,15 @@ func handleFilterInput(m Model, ks string) (Model, tea.Cmd) {
 			p.Cursor = 0
 		}
 	}
+	// Every branch above resets the cursor to 0 because the visible row set just
+	// changed. The panels whose selection drives Main therefore have to re-point it,
+	// or the panel highlights one row while Main still shows the previous one.
+	switch m.CurrentFocus() {
+	case FocusFiles:
+		m = followFilesSelection(m)
+	case FocusThreads:
+		m = followThreadsSelection(m)
+	}
 	return m, nil
 }
 

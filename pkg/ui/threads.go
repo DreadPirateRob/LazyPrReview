@@ -202,15 +202,19 @@ func UpdateThreads(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "j", "down":
 		if m.ThreadsPanel.Cursor < len(rows)-1 {
 			m.ThreadsPanel.Cursor++
+			m = followThreadsSelection(m)
 		}
 	case "k", "up":
 		if m.ThreadsPanel.Cursor > 0 {
 			m.ThreadsPanel.Cursor--
+			m = followThreadsSelection(m)
 		}
 	case "[":
 		m = cycleThreadsTab(m, -1)
+		m = followThreadsSelection(m)
 	case "]":
 		m = cycleThreadsTab(m, +1)
+		m = followThreadsSelection(m)
 	case "enter":
 		if len(rows) > 0 && m.ThreadsPanel.Cursor < len(rows) {
 			m = jumpToAnchoredThread(m, rows[m.ThreadsPanel.Cursor], true)
@@ -279,10 +283,13 @@ func switchThreadsTab(m Model, tab string) Model {
 	return m
 }
 
-func jumpToAnchoredThread(m Model, at diff.AnchoredThread, focusThread bool) Model {
-	// Not gated on at.Anchored: file-level and outdated threads render inline too
-	// (in the file-header block), so they are reachable — they just have no code
-	// line to land on, and the thread-id lookup below finds their summary row.
+// showThreadInMain points Main at a thread's location WITHOUT touching focus, so a
+// panel can follow its cursor the way followFilesSelection does.
+//
+// Not gated on at.Anchored: file-level and outdated threads render inline too (in
+// the file-header block), so they are reachable — they just have no code line to
+// land on, and the thread-id lookup below finds their summary row.
+func showThreadInMain(m Model, at diff.AnchoredThread) Model {
 	for i, file := range m.DiffFiles {
 		if file.Path != at.FilePath {
 			continue
@@ -308,7 +315,14 @@ func jumpToAnchoredThread(m Model, at diff.AnchoredThread, focusThread bool) Mod
 		m = syncFilesCursorToMain(m)
 		break
 	}
-	m = followMainCursor(m)
+	return followMainCursor(m)
+}
+
+// jumpToAnchoredThread shows the thread and then takes focus: the thread itself when
+// focusThread, else Main. Use showThreadInMain directly to follow without stealing
+// focus from the panel doing the following.
+func jumpToAnchoredThread(m Model, at diff.AnchoredThread, focusThread bool) Model {
+	m = showThreadInMain(m, at)
 	if focusThread {
 		m.ThreadCursor = 0
 		m.FocusedThreadID = at.Thread.ID
@@ -321,6 +335,28 @@ func jumpToAnchoredThread(m Model, at diff.AnchoredThread, focusThread bool) Mod
 		m = m.PushFocus(FocusMain)
 	}
 	return m
+}
+
+// followThreadsSelection keeps Main showing the thread under the Threads cursor,
+// mirroring how the Files panel follows its selection. Focus stays in the panel.
+//
+// Two deliberate exclusions:
+//   - The Commits tab. Its enter FETCHES a commit diff, so following the cursor
+//     would fire a network request per keystroke. Threads are free by comparison —
+//     the anchors are already in memory. Same rule that keeps the PR list from
+//     fetching on j/k.
+//   - An external gui.diffPager, which spawns a process synchronously (3s cap) per
+//     render, so following every keystroke would stall the UI. Pager users still
+//     get the jump on enter.
+func followThreadsSelection(m Model) Model {
+	if m.Config.GUI.DiffPager != "" || m.ThreadTab == ThreadsTabCommits {
+		return m
+	}
+	rows := filteredThreadRows(m)
+	if len(rows) == 0 {
+		return m
+	}
+	return showThreadInMain(m, rows[min(m.ThreadsPanel.Cursor, len(rows)-1)])
 }
 
 // focusedThread returns the thread being viewed in FocusThread. It resolves the

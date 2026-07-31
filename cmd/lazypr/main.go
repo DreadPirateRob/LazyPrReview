@@ -50,6 +50,13 @@ func main() {
 	})
 	client := ghforge.New(runner)
 	model := ui.New(cfg, client)
+	// Author bot/human flags live in their own file, so a malformed or missing one
+	// must never stop the TUI from starting — fall back to the built-in defaults.
+	if roles, err := config.LoadAuthors(); err == nil {
+		model.AuthorRoles = roles
+	} else {
+		fmt.Fprintf(os.Stderr, "warning: ignoring %s: %v\n", config.AuthorsPath(), err)
+	}
 	model.OpenedPRNumber = opts.PRNumber
 	model.StartupCmd = startupCmd(client, opts)
 

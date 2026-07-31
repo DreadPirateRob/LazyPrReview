@@ -174,7 +174,7 @@ func TestMainOverviewRestoreOnEscAndZero(t *testing.T) {
 	if m.MainMode != MainOverview {
 		t.Fatalf("expected overview baseline, got %s", m.MainMode)
 	}
-	overview := strings.Join(composePROverview(*m.PRDetail), "\n")
+	overview := strings.Join(m.MainLines, "\n")
 
 	// Opening a file switches Main into diff mode.
 	opened, _ := UpdateFiles(m, tea.KeyPressMsg{Code: tea.KeyEnter})

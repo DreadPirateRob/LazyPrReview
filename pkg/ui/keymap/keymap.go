@@ -70,6 +70,9 @@ var actions = []Action{
 	{"prevMention", "main", "Prev mention", []string{"M"}},
 	{"centerCursor", "main", "Center", []string{"zz"}},
 	{"toggleThreadFold", "main", "Fold", []string{"z"}},
+	{"collapseAllOverview", "main", "Collapse all", []string{"-"}},
+	{"expandAllOverview", "main", "Expand all", []string{"="}},
+	{"toggleAuthorBot", "main", "Bot?", []string{"b"}},
 	{"editConfig", "status", "Edit config", []string{"e"}},
 	// Authoring (Phase 2). Registered per real context so `?` help and the
 	// hint bar surface them where they actually work.

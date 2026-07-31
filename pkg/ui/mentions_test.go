@@ -87,7 +87,7 @@ func TestMentionBadgeOnCollapsedThread(t *testing.T) {
 	m.PRDetail.Threads[0].Comments[0].Body = "@adrian thoughts?"
 	m.AnchoredThreads, m.UnresolvedThreadIndex = buildAnchors(m.PRDetail, m.DiffFiles)
 
-	lines, rows := buildDiffRows(m, 0)
+	lines, rows := buildDiffRows(m, 0, 100)
 	hdr := findThreadHeader(rows, "t1")
 	if hdr < 0 {
 		t.Fatal("expected the thread summary to render")

@@ -23,6 +23,7 @@ const (
 	ToastNoUnresolvedThreads      = "No unresolved threads"
 	ToastNoUnresolvedThreadInFile = "No unresolved thread in file"
 	ToastNoMentions               = "No threads mention you"
+	ToastAuthorFlagFailed         = "Could not save author flag"
 	ToastSetEditorForConfig       = "Set $EDITOR to edit config"
 	ToastCannotResolveThread      = "You can't resolve this thread"
 	ToastResolveFailed            = "Resolve/unresolve failed"

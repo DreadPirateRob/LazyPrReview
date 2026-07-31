@@ -76,7 +76,7 @@ func showPROverview(m Model) Model {
 		return m
 	}
 	m.MainMode = MainOverview
-	m = setMainLines(m, composePROverview(*m.PRDetail))
+	m = setMainOverview(m, *m.PRDetail)
 	m.MainCursor = 0
 	m.MainScroll = 0
 	m.MainPendingZ = false
@@ -234,7 +234,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ThreadsPanel.Cursor = 0
 		m.ChecksPanel.Filter = ""
 		m.ChecksPanel.Cursor = 0
-		m = setMainLines(m, composePROverview(msg.Detail))
+		m = setMainOverview(m, msg.Detail)
 		m.MainMode = MainOverview
 		m.MainFileIndex = 0
 		m.MainCursor = 0
@@ -366,6 +366,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewedToggleResultMsg:
 		m.Activity = ""
 		m = applyViewedToggleResult(m, msg)
+		return m, nil
+
+	case authorRolesSavedMsg:
+		// Success is silent: the flag was already applied optimistically. A failure
+		// must NOT be swallowed — the flag would then silently not survive restart.
+		if msg.Err != nil {
+			m.Toast = NewToast(ToastAuthorFlagFailed)
+		}
 		return m, nil
 
 	case prsLoadedMsg:
@@ -535,6 +543,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "4":
 		m = m.PushFocus(FocusThreads)
+		m = followThreadsSelection(m)
 		return m, nil
 	case "5":
 		m = m.PushFocus(FocusChecks)
