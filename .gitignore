@@ -1,0 +1,40 @@
+# Compiled binaries.
+#
+# The leading slash is load-bearing: an unanchored "lazypr" pattern would also
+# match the cmd/lazypr SOURCE directory and silently untrack the whole package.
+/lazypr
+/bin/
+
+# Go build & test artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.*
+profile.cov
+
+# Go workspace files are machine-local
+go.work
+go.work.sum
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.*.sw?
+
+# OS cruft
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+desktop.ini
+
+# NOTE: testdata/ is intentionally NOT ignored — the fixtures under testdata/gh
+# and testdata/diff are read by the test suite.

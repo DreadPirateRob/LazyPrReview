@@ -1,0 +1,990 @@
+package ui
+
+import (
+	"fmt"
+	"image"
+	"strings"
+
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
+	"github.com/DreadPirateRob/LazyPrReview/pkg/domain"
+	"github.com/charmbracelet/x/ansi"
+)
+
+// setMainLines replaces the Main pane content and bumps the render generation,
+// invalidating any active multi-line selection tied to the previous content.
+func setMainLines(m Model, lines []string) Model {
+	m.MainLines = lines
+	m.MainGen++
+	// Any new Main content leaves the directory view and drops the row model;
+	// showDirInMain and setMainDiff re-set theirs immediately after their own
+	// call, so those are the only places that opt back in.
+	m.MainDirPath = ""
+	m.MainDirFilter = ""
+	m.MainRows = nil
+	return m
+}
+
+func MainView(m Model) string {
+	if m.PRDetail == nil {
+		return "Main\n"
+	}
+	if len(m.MainLines) == 0 {
+		body := strings.TrimSpace(m.PRDetail.Body)
+		if body == "" {
+			body = m.PRDetail.Title
+		}
+		return "Main\n" + body + "\n"
+	}
+	var sb strings.Builder
+	sb.WriteString("Main\n")
+	mark := m.MainCursor
+	if mainRangeActive(m) {
+		mark, _ = mainRangeBounds(m)
+	}
+	for i, line := range m.MainLines {
+		cursor := " "
+		if i == mark {
+			cursor = ">"
+		}
+		sb.WriteString(cursor + " " + line + "\n")
+	}
+	return sb.String()
+}
+
+func UpdateMain(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	ks := dispatchKey(msg)
+
+	// zz: two-tap vim-style center. The first z arms; a second z centers the
+	// cursor line. Any other key disarms and is handled normally.
+	//
+	// Inside an inline thread block, a single z folds/unfolds that thread instead
+	// of arming — the block is what you want to collapse there, and `zz` stays
+	// available on every code row. threadRowID (not threadIDAtMainCursor) is the
+	// narrow check, so an anchored code line keeps its centering behavior.
+	if m.MainPendingZ {
+		m.MainPendingZ = false
+		if ks == "z" {
+			return centerMainCursor(m), nil
+		}
+	} else if ks == "z" {
+		if id := threadRowID(m); id != "" {
+			return toggleThreadFold(m, id), nil
+		}
+		m.MainPendingZ = true
+		return m, nil
+	}
+
+	switch ks {
+	case "j", "down":
+		if m.MainCursor < len(m.MainLines)-1 {
+			m.MainCursor++
+		}
+		m = followMainCursor(m)
+	case "k", "up":
+		if m.MainCursor > 0 {
+			m.MainCursor--
+		}
+		m = followMainCursor(m)
+	case "J", "ctrl+d":
+		m = scrollMain(m, mainHalfPage(m))
+	case "K", "ctrl+u":
+		m = scrollMain(m, -mainHalfPage(m))
+	case "pgdown", "pgdn":
+		m = scrollMain(m, mainFullPage(m))
+	case "pgup":
+		m = scrollMain(m, -mainFullPage(m))
+	case "<":
+		m.MainCursor = 0
+		m = followMainCursor(m)
+	case ">":
+		if len(m.MainLines) > 0 {
+			m.MainCursor = len(m.MainLines) - 1
+		}
+		m = followMainCursor(m)
+	case "[":
+		if m.MainFileIndex > 0 {
+			m = setMainFile(m, m.MainFileIndex-1)
+			m = followMainCursor(m)
+		}
+	case "]":
+		if m.MainFileIndex < len(m.DiffFiles)-1 {
+			m = setMainFile(m, m.MainFileIndex+1)
+			m = followMainCursor(m)
+		}
+	case "space":
+		// The file-header row *is* the file, so space there toggles its viewed
+		// state — same meaning as space in the Files panel. Keyed off the row model
+		// rather than "cursor == 0": it also proves we are in a built-in single-file
+		// diff, since no other Main mode populates rows.
+		if m.MainMode != MainDiff {
+			return m, nil
+		}
+		if r, ok := rowAt(m, m.MainCursor); !ok || r.Kind != rowFileHeader {
+			return m, nil
+		}
+		idx := prFileIndexForMain(m)
+		if idx < 0 {
+			return m, nil
+		}
+		return toggleViewedFiles(m, []int{idx})
+	case "t":
+		if len(m.UnresolvedThreadIndex) == 0 {
+			m.Toast = NewToast(ToastNoUnresolvedThreads)
+			return m, nil
+		}
+		m = cycleThreadJump(m, +1)
+	case "T":
+		if len(m.UnresolvedThreadIndex) == 0 {
+			m.Toast = NewToast(ToastNoUnresolvedThreads)
+			return m, nil
+		}
+		m = cycleThreadJump(m, -1)
+	case "m":
+		if len(mentionThreads(m)) == 0 {
+			m.Toast = NewToast(ToastNoMentions)
+			return m, nil
+		}
+		m = cycleMentionJump(m, +1)
+	case "M":
+		if len(mentionThreads(m)) == 0 {
+			m.Toast = NewToast(ToastNoMentions)
+			return m, nil
+		}
+		m = cycleMentionJump(m, -1)
+	case "enter":
+		if id := threadIDAtMainCursor(m); id != "" {
+			m.FocusedThreadID = id
+			m.ThreadCursor = 0
+			m = m.PushFocus(FocusThread)
+		}
+	case "v":
+		if m.MainMode != MainDiff || m.Config.GUI.DiffPager != "" {
+			return m, nil
+		}
+		if mainRangeActive(m) {
+			m.MainRangeActive = false
+		} else if _, _, _, ok := mainCommentAnchor(m); ok {
+			m.MainRangeActive = true
+			m.MainRangeStart = m.MainCursor
+			m.MainRangeGen = m.MainGen
+		}
+		return m, nil
+	case "c":
+		if mainRangeActive(m) {
+			return openRangeComment(m)
+		}
+		path, line, side, ok := mainCommentAnchor(m)
+		if !ok {
+			if m.MainMode == MainDiff && m.Config.GUI.DiffPager != "" {
+				m.Toast = NewToast(ToastLineCommentPager)
+			}
+			return m, nil
+		}
+		m = openComposer(m, composeState{
+			Kind: composeComment, Required: true, SubjectType: "LINE",
+			Title: fmt.Sprintf("Comment %s:%d (%s) — ctrl+s submit", path, line, side),
+			Path:  path, Line: line, Side: side,
+			Preview: previewRows(m, m.MainCursor, m.MainCursor),
+		})
+		return m, nil
+	}
+	return m, nil
+}
+
+// mainVisibleRows returns how many content rows the Main pane shows
+// (non-positive when dimensions are unknown, i.e. headless).
+func mainVisibleRows(m Model) int {
+	return ComputeLayout(m).MainHeight - 2
+}
+
+// mainHalfPage is the ctrl+d/ctrl+u stride; mainFullPage the PgDn/PgUp one.
+// Headless or degenerate panes fall back to the historical fixed page.
+func mainHalfPage(m Model) int {
+	if rows := mainVisibleRows(m); rows > 1 {
+		return maxInt(1, rows/2)
+	}
+	return 10
+}
+
+func mainFullPage(m Model) int {
+	if rows := mainVisibleRows(m); rows > 1 {
+		return rows
+	}
+	return 10
+}
+
+// scrollMain moves the cursor and the view together, vim-style: after
+// ctrl+d/ctrl+u the cursor keeps its relative row on screen.
+func scrollMain(m Model, delta int) Model {
+	m.MainCursor += delta
+	if last := len(m.MainLines) - 1; m.MainCursor > last {
+		m.MainCursor = last
+	}
+	if m.MainCursor < 0 {
+		m.MainCursor = 0
+	}
+	m.MainScroll += delta
+	return followMainCursor(m)
+}
+
+// followMainCursor clamps the Main scroll origin so the cursor stays inside
+// the visible window and the window inside the content. With unknown
+// dimensions the origin resets and rendering derives the window from the
+// cursor alone.
+func followMainCursor(m Model) Model {
+	rows := mainVisibleRows(m)
+	if rows < 1 {
+		m.MainScroll = 0
+		return m
+	}
+	if m.MainCursor < m.MainScroll {
+		m.MainScroll = m.MainCursor
+	}
+	if m.MainCursor >= m.MainScroll+rows {
+		m.MainScroll = m.MainCursor - rows + 1
+	}
+	if maxTop := len(m.MainLines) - rows; m.MainScroll > maxTop {
+		m.MainScroll = maxTop
+	}
+	if m.MainScroll < 0 {
+		m.MainScroll = 0
+	}
+	return m
+}
+
+// centerMainCursor centers the cursor's line vertically in the pane (zz).
+func centerMainCursor(m Model) Model {
+	if mainVisibleRows(m) < 1 {
+		return m
+	}
+	m.MainScroll = m.MainCursor - mainVisibleRows(m)/2
+	return followMainCursor(m)
+}
+
+func UpdateThreadFocus(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	at, ok := focusedThread(m)
+	n := 0
+	if ok {
+		n = len(at.Thread.Comments)
+	}
+	switch msg.Keystroke() {
+	case "j", "down":
+		if m.ThreadCursor < n-1 {
+			m.ThreadCursor++
+		}
+	case "k", "up":
+		if m.ThreadCursor > 0 {
+			m.ThreadCursor--
+		}
+	case "e":
+		c, ok := focusedComment(m)
+		if !ok {
+			return m, nil
+		}
+		if !c.ViewerDidAuthor {
+			m.Toast = NewToast(ToastNotYourComment)
+			return m, nil
+		}
+		m = openComposer(m, composeState{Kind: composeEdit, Required: true, CommentID: c.ID, Title: "Edit comment — ctrl+s save · esc cancel"})
+		m.Composer.SetValue(c.Body)
+		return m, nil
+	case "d":
+		c, ok := focusedComment(m)
+		if !ok {
+			return m, nil
+		}
+		if !c.ViewerDidAuthor {
+			m.Toast = NewToast(ToastNotYourComment)
+			return m, nil
+		}
+		return beginCommentDelete(m, c), nil
+	case "r":
+		at, ok := focusedThread(m)
+		if !ok {
+			return m, nil
+		}
+		if !at.Thread.ViewerCanReply {
+			m.Toast = NewToast(ToastCannotReply)
+			return m, nil
+		}
+		m = openComposer(m, composeState{Kind: composeReply, Required: true, ThreadID: at.Thread.ID, Title: "Reply to thread — ctrl+s submit · esc cancel"})
+		return m, nil
+	}
+	return m, nil
+}
+
+func cycleThreadJump(m Model, delta int) Model {
+	if len(m.UnresolvedThreadIndex) == 0 {
+		return m
+	}
+	// Locate the thread the cursor is on so t/T advance from there.
+	// threadIDAtMainCursor matches from anywhere inside an inline block as well as
+	// from the anchored code line, which is all the old arithmetic could reach.
+	current := 0
+	if id := threadIDAtMainCursor(m); id != "" {
+		for i, at := range m.UnresolvedThreadIndex {
+			if at.Thread.ID == id {
+				current = i
+				break
+			}
+		}
+	}
+	next := (current + delta + len(m.UnresolvedThreadIndex)) % len(m.UnresolvedThreadIndex)
+	return jumpToAnchoredThread(m, m.UnresolvedThreadIndex[next], false)
+}
+
+// composePROverview builds a GitHub-PR-style overview for the Main pane: a
+// header with branch/target, reviewers, assignees, labels and review status,
+// followed by the description and the full conversation (timeline + review
+// threads). The viewport makes the whole thing scrollable.
+var draftStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("6")) // cyan [draft]
+
+func composePROverview(d domain.PRDetail) []string {
+	out := []string{}
+	add := func(s string) { out = append(out, s) }
+	rule := strings.Repeat("─", 60)
+
+	state := d.State
+	if d.IsDraft {
+		state = "DRAFT"
+	}
+	add(fmt.Sprintf("#%d  %s", d.Number, d.Title))
+	add(fmt.Sprintf("%s · by %s", orDash(state), orDash(d.Author)))
+	add(fmt.Sprintf("branch: %s  →  %s", orDash(d.HeadRefName), orDash(d.BaseRefName)))
+	add(fmt.Sprintf("changes: +%d -%d · %d files", d.Additions, d.Deletions, d.ChangedFiles))
+	add("review: " + reviewStatusLine(d))
+	add("reviewers: " + reviewerNames(d.RequestedReviewers))
+	add("assignees: " + joinOrDash(d.Assignees))
+	add("labels: " + labelNames(d.Labels))
+
+	add(rule)
+	add("Description")
+	body := strings.TrimRight(d.Body, "\n")
+	if strings.TrimSpace(body) == "" {
+		add("(no description)")
+	} else {
+		for _, l := range strings.Split(body, "\n") {
+			add(l)
+		}
+	}
+
+	add(rule)
+	add(fmt.Sprintf("Conversation (%d)", len(d.Timeline)))
+	if len(d.Timeline) == 0 {
+		add("(no comments yet)")
+	}
+	for _, it := range d.Timeline {
+		add("")
+		add(fmt.Sprintf("%s · %s · %s", orDash(it.Author), timelineVerb(it), it.SortAt.Format("2006-01-02 15:04")))
+		writeIndentedBody(add, it.Body, it.State)
+	}
+
+	if len(d.Threads) > 0 {
+		add(rule)
+		add(fmt.Sprintf("Review threads (%d)", len(d.Threads)))
+		for _, th := range d.Threads {
+			add("")
+			loc := th.Path
+			if th.Line != nil {
+				loc = fmt.Sprintf("%s:%d", th.Path, *th.Line)
+			}
+			draft := ""
+			if threadHasDraft(th) {
+				draft = draftStyle.Render(" [draft]")
+			}
+			add(fmt.Sprintf("%s  [%s]%s", orDash(loc), threadStatus(th), draft))
+			for _, c := range th.Comments {
+				add(fmt.Sprintf("  %s:", orDash(c.Author)))
+				b := strings.TrimRight(c.Body, "\n")
+				for _, l := range strings.Split(b, "\n") {
+					add("    " + l)
+				}
+			}
+		}
+	}
+
+	return out
+}
+
+func reviewStatusLine(d domain.PRDetail) string {
+	status := d.ReviewDecision
+	if status == "" {
+		status = "REVIEW_REQUIRED"
+	}
+	if d.PendingReviewCount > 0 {
+		status += fmt.Sprintf(" · PENDING (%d draft comment(s))", d.PendingReviewCount)
+	}
+	return status
+}
+
+func reviewerNames(rs []domain.RequestedReviewer) string {
+	if len(rs) == 0 {
+		return "—"
+	}
+	names := make([]string, len(rs))
+	for i, r := range rs {
+		if r.Kind == "team" {
+			names[i] = "@" + r.Name
+		} else {
+			names[i] = r.Name
+		}
+	}
+	return strings.Join(names, ", ")
+}
+
+func labelNames(ls []domain.Label) string {
+	if len(ls) == 0 {
+		return "—"
+	}
+	names := make([]string, len(ls))
+	for i, l := range ls {
+		names[i] = l.Name
+	}
+	return strings.Join(names, ", ")
+}
+
+func joinOrDash(vs []string) string {
+	if len(vs) == 0 {
+		return "—"
+	}
+	return strings.Join(vs, ", ")
+}
+
+func timelineVerb(it domain.TimelineItem) string {
+	switch it.Kind {
+	case "PullRequestReview":
+		if it.State != "" {
+			return "reviewed (" + it.State + ")"
+		}
+		return "reviewed"
+	case "IssueComment":
+		return "commented"
+	default:
+		return orDash(it.Kind)
+	}
+}
+
+func threadStatus(th domain.Thread) string {
+	switch {
+	case th.IsResolved:
+		return "resolved"
+	case th.IsOutdated:
+		return "outdated"
+	default:
+		return "unresolved"
+	}
+}
+
+func writeIndentedBody(add func(string), body, state string) {
+	b := strings.TrimRight(body, "\n")
+	if strings.TrimSpace(b) == "" {
+		if state != "" {
+			add("  (" + strings.ToLower(state) + ")")
+		}
+		return
+	}
+	for _, l := range strings.Split(b, "\n") {
+		add("  " + l)
+	}
+}
+
+func orDash(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "—"
+	}
+	return s
+}
+
+func fullView(m Model) string {
+	layout := ComputeLayout(m)
+	header := fmt.Sprintf("mode: %s portrait=%t side=%d main=%d", m.ScreenMode, layout.Portrait, layout.SidePanelWidth, layout.MainWidth)
+	if m.Toast.Message != "" {
+		header += " | toast: " + m.Toast.Message
+	} else if m.Activity != "" {
+		header += " | activity: " + m.Activity
+	}
+
+	focus := m.CurrentFocus()
+	fi := focusedPanelIndex(focus)
+
+	sidePanes := func(w int) []string {
+		return []string{
+			renderPane(paneBox{title: "Status", number: 1, content: StatusView(m), width: w, height: layout.PanelHeights[0], anchor: m.Status.Cursor, focused: fi == 0}),
+			renderPane(paneBox{title: prListTitle(m), number: 2, content: PRListView(m, layout.PanelHeights[1]), width: w, height: layout.PanelHeights[1], anchor: 2 * m.PRPanel.Cursor, focused: fi == 1, loading: m.LoadingPRs, selectionSpan: 2}),
+			renderPane(paneBox{title: filesTitle(m), number: 3, content: FilesView(m, w), width: w, height: layout.PanelHeights[2], anchor: m.FilesPanel.Cursor, focused: fi == 2, loading: m.LoadingDetail}),
+			renderPane(paneBox{title: threadsTitle(m), number: 4, content: ThreadsView(m), width: w, height: layout.PanelHeights[3], anchor: m.ThreadsPanel.Cursor, focused: fi == 3, loading: m.LoadingDetail}),
+			renderPane(paneBox{title: checksTitle(m), number: 5, content: ChecksView(m), width: w, height: layout.PanelHeights[4], anchor: m.ChecksPanel.Cursor, focused: fi == 4, loading: m.LoadingDetail}),
+		}
+	}
+	mainPane := func(w, h int) string {
+		anchor := 1 + m.MainCursor
+		span := 1
+		if mainRangeActive(m) {
+			lo, hi := mainRangeBounds(m)
+			anchor = 1 + lo
+			span = hi - lo + 1
+		}
+		return renderPane(paneBox{titled: true, number: 0, content: MainView(m), width: w, height: h, anchor: anchor, focused: focus == FocusMain, scroll: &m.MainScroll, loading: m.LoadingDetail, selectionSpan: span})
+	}
+
+	body := ""
+	switch {
+	case m.ScreenMode == ScreenFullscreen:
+		body = mainPane(layout.MainWidth, layout.MainHeight)
+	case layout.Portrait:
+		body = joinPanes(append(sidePanes(layout.Width), mainPane(layout.Width, layout.MainHeight)))
+	default:
+		left := joinPanes(sidePanes(layout.SidePanelWidth))
+		main := mainPane(layout.MainWidth, layout.MainHeight)
+		body = renderColumns(left, main, layout.SidePanelWidth, layout.MainWidth)
+	}
+
+	// Floating overlays (composer, menus, confirms, help) draw as a centered box
+	// ON TOP of the live UI, so the panels stay visible behind them.
+	if content, anchor, ok := activeOverlay(m); ok {
+		body = floatOverlay(body, content, anchor, layout)
+	}
+
+	// Header and hint bar render outside the pane boxes; clamp them to the
+	// terminal width so an overlong line can never wrap and shear the frame.
+	parts := []string{fitWidth(header, layout.Width), body}
+	if m.CommandLogOn {
+		parts = append(parts, renderPane(paneBox{titled: true, number: -1, content: commandLogView(m), width: layout.Width, height: layout.CommandLogHeight, anchor: 1 + m.CommandLogOffset, focused: m.CommandLogFocused}))
+	}
+	if hint := HintBarView(m); hint != "" {
+		parts = append(parts, fitWidth(hint, layout.Width))
+	}
+	return strings.Join(parts, "\n")
+}
+
+// activeOverlay returns the content and selection anchor of the floating overlay
+// to draw over the UI, in priority order (composer, menu, help), or ok=false when
+// none is active.
+func activeOverlay(m Model) (string, int, bool) {
+	switch focus := m.CurrentFocus(); {
+	case focus == FocusCompose:
+		return ComposeView(m), 0, true
+	case len(m.MenuItems) > 0 && focus == FocusMenu:
+		return MenuView(m), 1 + m.MenuCursor, true
+	case m.HelpVisible:
+		return helpOverlayView(m), 1 + m.HelpCursor, true
+	}
+	return "", 0, false
+}
+
+// floatOverlay renders content as a centered floating box over base. The box is
+// sized to its content and capped so the UI behind it stays visible, and it goes
+// through renderPane so anchor/scroll clipping keeps long content reachable with
+// the cursor. With unknown terminal dimensions (headless/tests) there is no grid
+// to composite onto, so it degrades to rendering the overlay in place of body.
+func floatOverlay(base, content string, anchor int, layout Layout) string {
+	if layout.Width <= 0 || layout.MainHeight <= 0 {
+		return renderPane(paneBox{titled: true, number: -1, content: content, width: layout.MainWidth, height: layout.MainHeight, anchor: anchor, focused: true})
+	}
+	w, h := modalDims(content, lipgloss.Width(base), lipgloss.Height(base))
+	box := renderPane(paneBox{titled: true, number: -1, content: content, width: w, height: h, anchor: anchor, focused: true})
+	return overlayCenter(base, box)
+}
+
+// modalDims sizes a floating box to its content, capped to leave a margin so the
+// UI behind it frames the modal instead of being covered edge to edge.
+func modalDims(content string, bw, bh int) (int, int) {
+	w := lipgloss.Width(content) + 2  // left + right border
+	h := lipgloss.Height(content) + 2 // top + bottom border
+	if lim := bw - 4; lim > 0 && w > lim {
+		w = lim
+	}
+	if lim := bh - 2; lim > 0 && h > lim {
+		h = lim
+	}
+	if w > bw {
+		w = bw
+	}
+	if h > bh {
+		h = bh
+	}
+	return w, h
+}
+
+// overlayCenter composites modal centered over base on a lipgloss cell canvas,
+// leaving base cells outside the modal's rectangle untouched. The result keeps
+// base's exact dimensions, so the header and hint bar never shift.
+func overlayCenter(base, modal string) string {
+	bw, bh := lipgloss.Width(base), lipgloss.Height(base)
+	mw, mh := lipgloss.Width(modal), lipgloss.Height(modal)
+	if bw <= 0 || bh <= 0 || mw <= 0 || mh <= 0 {
+		return base
+	}
+	if mw > bw {
+		mw = bw
+	}
+	if mh > bh {
+		mh = bh
+	}
+	x, y := (bw-mw)/2, (bh-mh)/2
+	canvas := lipgloss.NewCanvas(bw, bh)
+	lipgloss.NewLayer(base).Draw(canvas, canvas.Bounds())
+	lipgloss.NewLayer(modal).Draw(canvas, image.Rect(x, y, x+mw, y+mh))
+	return canvas.Render()
+}
+
+// joinPanes stacks rendered panes, dropping panes that got no rows at all so
+// degenerate layouts never add stray blank lines to the frame.
+func joinPanes(panes []string) string {
+	kept := panes[:0]
+	for _, p := range panes {
+		if p != "" {
+			kept = append(kept, p)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
+// paneBox describes one panel for the render layer.
+type paneBox struct {
+	title         string // border title, used when the content has no embedded title line
+	titled        bool   // content's first line is a title; it moves into the border
+	number        int    // jump-key digit shown in the border; -1 hides it
+	content       string
+	width         int // outer box width, borders included
+	height        int // outer box height, borders included
+	anchor        int // content-coordinate line index kept visible (the selection row)
+	focused       bool
+	scroll        *int // explicit top row (content coords, post-title); nil derives from anchor
+	loading       bool // dim + interaction-blocked while its data refetches
+	selectionSpan int  // rows the selection covers (PR rows span 2); 0/1 = single
+}
+
+// renderPane renders one panel. With known terminal dimensions it draws a
+// rounded bordered box — jump number and title embedded in the top edge, the
+// focused panel accented — keeps the anchor row visible through a bubbles
+// viewport, and repaints the selection row as a background highlight instead
+// of a chevron. When dimensions are unknown (headless/tests) it falls back to
+// plain clipping so the full content is still emitted without ANSI.
+func renderPane(p paneBox) string {
+	if p.width <= 0 {
+		// Headless/test path: plain output, no ANSI. Explicit border titles
+		// (tabs, filter state) are prepended as a line so the text rendering
+		// stays faithful; anchor remains in content coordinates.
+		content := p.content
+		if !p.titled && p.title != "" {
+			content = p.title + "\n" + content
+		}
+		if p.focused {
+			content = markFocusedPane(content)
+		}
+		return clipPane(content, p.height, p.anchor)
+	}
+	if p.height <= 0 {
+		// Real terminal, but the layout granted no rows: render nothing so
+		// the pane is dropped instead of leaking unclipped content.
+		return ""
+	}
+
+	title, body, anchor := p.title, p.content, p.anchor
+	if p.titled {
+		parts := strings.SplitN(p.content, "\n", 2)
+		title = parts[0]
+		body = ""
+		if len(parts) > 1 {
+			body = parts[1]
+		}
+		anchor--
+	}
+	if anchor < 0 {
+		anchor = 0
+	}
+	span := p.selectionSpan
+	if span < 1 {
+		span = 1
+	}
+	if p.loading {
+		// Dim the (stale) content and mark the title while a refetch is in
+		// flight; interaction is blocked in handleKey.
+		title = "⟳ " + title
+		body = dimLines(body)
+	}
+
+	if p.height < 3 || p.width < 4 {
+		// Too small for a border; render the bare scroll window.
+		return paneWindow(body, p.width, p.height, anchor, p.scroll, span)
+	}
+
+	innerW, innerH := p.width-2, p.height-2
+	inner := paneWindow(highlightSelection(body, anchor, innerW, p.focused, span), innerW, innerH, anchor, p.scroll, span)
+
+	border := blurredBorderStyle
+	if p.focused {
+		border = focusedBorderStyle
+	}
+	side := border.Render("│")
+
+	var sb strings.Builder
+	sb.WriteString(border.Render(topBorder(title, p.number, innerW)))
+	rows := strings.Split(inner, "\n")
+	for i := 0; i < innerH; i++ {
+		row := ""
+		if i < len(rows) {
+			row = rows[i]
+		}
+		sb.WriteString("\n")
+		sb.WriteString(side)
+		sb.WriteString(padRight(fitWidth(row, innerW), innerW))
+		sb.WriteString(side)
+	}
+	sb.WriteString("\n")
+	sb.WriteString(border.Render("╰" + strings.Repeat("─", innerW) + "╯"))
+	return sb.String()
+}
+
+// paneWindow renders content through a bubbles viewport. A non-nil scroll
+// pins the top row (the caller owns the origin, e.g. Main's sticky scroll);
+// EnsureVisible then only corrects when the anchor would fall outside.
+func paneWindow(content string, width, height, anchor int, scroll *int, span int) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
+	if span < 1 {
+		span = 1
+	}
+	total := strings.Count(strings.TrimRight(content, "\n"), "\n") + 1
+	clamp := func(a int) int {
+		if a > total-1 {
+			a = total - 1
+		}
+		if a < 0 {
+			a = 0
+		}
+		return a
+	}
+	vp := viewport.New(
+		viewport.WithWidth(width),
+		viewport.WithHeight(height),
+	)
+	vp.SetContent(content)
+	if scroll != nil {
+		vp.SetYOffset(*scroll)
+	}
+	// Keep the whole selection ([anchor, anchor+span)) in view: ensure the
+	// last row first, then the first, so the top wins if both can't fit.
+	vp.EnsureVisible(clamp(anchor+span-1), 0, 0)
+	vp.EnsureVisible(clamp(anchor), 0, 0)
+	return vp.View()
+}
+
+// dimLines greys out every line (stripping any existing color) so a loading,
+// non-interactive pane reads as inactive.
+func dimLines(content string) string {
+	lines := strings.Split(content, "\n")
+	for i, l := range lines {
+		lines[i] = dimStyle.Render(ansi.Strip(l))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// topBorder builds a pane's top edge with the jump number and title embedded,
+// e.g. ╭─[3]─Files [tree]──────╮.
+func topBorder(title string, number int, innerW int) string {
+	label := ""
+	if title != "" {
+		if number >= 0 {
+			label = fmt.Sprintf("─[%d]─%s", number, title)
+		} else {
+			label = "─" + title
+		}
+		label = ansi.Truncate(label, innerW, "…")
+	}
+	fill := innerW - ansi.StringWidth(label)
+	if fill < 0 {
+		fill = 0
+	}
+	return "╭" + label + strings.Repeat("─", fill) + "╮"
+}
+
+// highlightSelection repaints the selection row as a full-width background
+// highlight, dropping the `> ` chevron the views emit. Rows without the
+// chevron prefix (scroll-only panes, placeholders, empty lists) are left
+// untouched, so panes without a selection concept are unaffected.
+func highlightSelection(body string, anchor, width int, focused bool, span int) string {
+	if width <= 0 || anchor < 0 || span < 1 {
+		return body
+	}
+	lines := strings.Split(body, "\n")
+	if anchor >= len(lines) || !strings.HasPrefix(lines[anchor], "> ") {
+		return body
+	}
+	style := blurredSelectStyle
+	if focused {
+		style = focusedSelectStyle
+	}
+	// Highlight every row of the selected entry (PR rows span two). Drop the
+	// "> " marker from the first row; the row's own fg colors are kept and the
+	// selection background is re-asserted after each inner reset so it runs
+	// unbroken across the full width.
+	for r := anchor; r < anchor+span && r < len(lines); r++ {
+		text := lines[r]
+		if r == anchor {
+			text = "  " + lines[r][2:]
+		}
+		lines[r] = selectionRow(style, padRight(fitWidth(text, width), width))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// selectionRow lays style's background under content while keeping content's
+// own foreground colors intact. lipgloss resets (\x1b[m / \x1b[0m) inside the
+// row would otherwise clear the background mid-line, so the background opener is
+// re-applied after each reset. Degrades to plain content when the active color
+// profile emits no styling (e.g. NO_COLOR).
+func selectionRow(style lipgloss.Style, content string) string {
+	sample := style.Render(" ")
+	sp := strings.IndexByte(sample, ' ')
+	if sp <= 0 {
+		return content
+	}
+	open, closer := sample[:sp], sample[sp+1:]
+	content = strings.ReplaceAll(content, "\x1b[0m", "\x1b[0m"+open)
+	content = strings.ReplaceAll(content, "\x1b[m", "\x1b[m"+open)
+	return open + content + closer
+}
+
+var (
+	// Border styling: the focused panel reads accent+bold, the rest stay dim.
+	focusedBorderStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14"))
+	blurredBorderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	// Selection rows render as a background "hover" instead of a chevron;
+	// subdued when the owning pane is not focused.
+	focusedSelectStyle = lipgloss.NewStyle().Background(lipgloss.Color("24"))
+	blurredSelectStyle = lipgloss.NewStyle().Background(lipgloss.Color("236"))
+	// dimStyle greys out a pane's content while it is loading.
+	dimStyle = lipgloss.NewStyle().Faint(true)
+)
+
+// markFocusedPane prefixes the pane's title line with an active-panel marker so
+// the focused panel is visually distinct from the others. Used on the headless
+// path where ANSI styling is intentionally omitted.
+func markFocusedPane(content string) string {
+	lines := strings.SplitN(content, "\n", 2)
+	lines[0] = "▌" + lines[0]
+	return strings.Join(lines, "\n")
+}
+
+func clipPane(content string, height int, anchor int) string {
+	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+	if height <= 0 || len(lines) <= height {
+		return strings.Join(lines, "\n")
+	}
+	if anchor < 0 {
+		anchor = 0
+	}
+	if anchor >= len(lines) {
+		anchor = len(lines) - 1
+	}
+	start := anchor - height/2
+	if start < 0 {
+		start = 0
+	}
+	end := start + height
+	if end > len(lines) {
+		end = len(lines)
+		start = maxInt(0, end-height)
+	}
+	return strings.Join(lines[start:end], "\n")
+}
+
+func renderColumns(left, right string, leftWidth, rightWidth int) string {
+	leftLines := strings.Split(strings.TrimRight(left, "\n"), "\n")
+	rightLines := strings.Split(strings.TrimRight(right, "\n"), "\n")
+	maxLines := len(leftLines)
+	if len(rightLines) > maxLines {
+		maxLines = len(rightLines)
+	}
+	var sb strings.Builder
+	for i := 0; i < maxLines; i++ {
+		l := ""
+		r := ""
+		if i < len(leftLines) {
+			l = fitWidth(leftLines[i], leftWidth)
+		}
+		if i < len(rightLines) {
+			r = fitWidth(rightLines[i], rightWidth)
+		}
+		sb.WriteString(padRight(l, leftWidth))
+		sb.WriteString(r)
+		sb.WriteString("\n")
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+// fitWidth truncates s to the given display width, appending an ellipsis when
+// content is cut. Measurement is ANSI-aware so styled lines (zero-width escape
+// sequences) and wide characters are handled correctly.
+func fitWidth(s string, width int) string {
+	if width <= 0 || ansi.StringWidth(s) <= width {
+		return s
+	}
+	return ansi.Truncate(s, width, "…")
+}
+
+// padRight pads s with spaces to the given display width, measuring visible
+// columns rather than runes so ANSI-styled lines stay aligned.
+func padRight(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	w := ansi.StringWidth(s)
+	if w >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-w)
+}
+
+func helpOverlayView(m Model) string {
+	scoped := FilterHelpEntries(scopedHelpEntries(m), m.HelpQuery)
+	var sb strings.Builder
+	sb.WriteString("Help\n")
+	for i, entry := range scoped {
+		cursor := " "
+		if i == m.HelpCursor {
+			cursor = ">"
+		}
+		sb.WriteString(fmt.Sprintf("%s %s %s %s\n", cursor, entry.Context, strings.Join(entry.Keys, ","), entry.Action))
+	}
+	return sb.String()
+}
+
+func commandLogView(m Model) string {
+	var sb strings.Builder
+	title := "Command log"
+	if m.CommandLogFocused {
+		title += " [focused]"
+	}
+	sb.WriteString(title + "\n")
+	start := m.CommandLogOffset
+	if start < 0 {
+		start = 0
+	}
+	if start > len(m.CommandLog) {
+		start = len(m.CommandLog)
+	}
+	for _, entry := range m.CommandLog[start:] {
+		sb.WriteString(strings.Join(entry.Command, " "))
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+func copyToastForFocus(m Model) string {
+	switch m.CurrentFocus() {
+	case FocusFiles:
+		return ToastCopiedFilePath
+	case FocusThread:
+		return ToastCopiedThreadPermalink
+	case FocusMain:
+		return ToastCopiedFilePath
+	default:
+		return ToastCopiedPRURL
+	}
+}

@@ -1,0 +1,1669 @@
+diff --git a/.claude/settings.json b/.claude/settings.json
+new file mode 100644
+index 00000000000..1c7ca8bb08a
+--- /dev/null
++++ b/.claude/settings.json
+@@ -0,0 +1,8 @@
++{
++  "permissions": {
++    "additionalDirectories": [
++      "/Users/stk/Stk/Dev/Builds/delta",
++      "/Users/stk/Stk/Dev/Builds/difftastic"
++    ]
++  }
++}
+diff --git a/diff-line-metadata-notes.md b/diff-line-metadata-notes.md
+new file mode 100644
+index 00000000000..c4a81d8449a
+--- /dev/null
++++ b/diff-line-metadata-notes.md
+@@ -0,0 +1,1033 @@
++# Diff line metadata — design notes
++
++Mapping a **rendered diff row (and column)** back to its **patch-space
++identity**, so lazygit can act on the line the user is pointing at.
++
++> Status: **design only**, nothing implemented. This is a starting point for a
++> future session, born out of a long design discussion. Two mechanisms are
++> described (#1 a host-side parser, #2 a pager-emitted OSC protocol); they are
++> complementary, not alternatives. Start with #1.
++
++---
++
++## 1. The primitive and its consumers
++
++Every feature below needs the *same* one thing: given a row in a rendered diff
++(and, for a mouse click, a column), recover **(file, type, source-line)** — the
++exact line in the unified diff it corresponds to. It is one primitive with
++several consumers, not a click-to-stage helper:
++
++1. **Dive into staging / patch building** (`enter` on the selected line, or a
++   double-click) — needs the patch line to land on.
++2. **Edit the line** (`e`) — needs the new-file line to open the editor at.
++3. **Open the line in the branch's GitHub PR** (`G`) — needs the side
++   (`L`/`R`) and line number for the anchor. Today we always emit `R<line>`
++   because we can't tell the side.
++4. **Jump by hunk in the focused main view** (`<`/`>`-style, like the staging
++   view already has) — needs hunk boundaries.
++5. **Preserve scroll position when diff parameters change** (`{`/`}` changing
++   the `-U` context size; today it jumps to the top via `onNewKey`) — remember
++   the patch line at the top/middle, re-render, scroll it back into view. This
++   reuses the first-paint scroll-restore machinery already built on this branch
++   (`ScrollToOriginYForNextTask`, commits `054d139fe`/`625e7dbad`). Anchor on
++   the **nearest change line**, which survives any `-U` change (context lines
++   don't).
++6. **Restore selection/scroll when escaping back from staging / patch building**
++   — land on the line the explorer view was *currently* selecting at escape
++   (after its auto-advance), not the line you entered on, since you may have
++   staged/dropped hunks meanwhile. Replaces the brittle numeric-index restore;
++   see focused-main-view-notes.md §12 (incl. the escape-routing special cases).
++7. **Preserve scroll/selection when switching pagers** (cycling `git.paging.pagers`
++   with `|`/`\`) — the same as #5 but triggered by a pager change instead of a
++   context-size change: re-anchor on the same patch line in the new pager's
++   rendering. Built; see focused-main-view-notes.md §18. The line-number anchor is
++   *especially* wrong here — switching a side-by-side pager for an inline one
++   restructures the diff, so the old line number points at unrelated content.
++
++Consumers **1–4** use the primitive in the **forward** direction (rendered row →
++identity). Consumers **5–7** use the **inverse** (identity → rendered row): they
++scan the rendered rows' metadata for the one matching a target patch identity,
++which the host does *as the buffer loads* via a predicate generalization of
++`ScrollToOriginYForNextTask` (focused-main-view-notes.md §12.3). The inverse
++direction is what motivates solving the §8 staleness trap up front.
++
++Because it's one primitive, it's worth building as a clean standalone
++capability rather than welding it to staging.
++
++---
++
++## 2. Two mechanisms, disjoint coverage
++
++### #1 — Host-side parsing (lazygit parses the rendered buffer)
++
++Parse the **decolorized view buffer** (gocui already exposes plain text per
++line via `View.Line(y)` / `View.BufferLines()`; the cell buffer stores runes
++with color stripped, so `utils.Decolorise` isn't strictly needed). Walk *up*
++from the target row to the nearest `@@` (gives the hunk's new-file start) and
++the nearest `diff --git a/… b/…` (gives the file), then count added/context
++lines down to the row. The first character (`+`/`-`/space) gives the side.
++
++- Reuses the `patch` package arithmetic (`LineNumberOfLine`,
++  `PatchLineForLineNumber`, hunk headers). The only new piece is multi-file
++  splitting (the commit diff spans files; `patch.Parse` is single-file).
++- **Inherently high-fidelity**: parsing *is* working in patch space, so it
++  knows the side and exact line directly — none of delta's hyperlink lossiness.
++- **Works for structure-preserving renderings**: no pager, `git diff --color`,
++  and `delta --color-only` **without line numbers**. You don't branch on which
++  pager is configured — you just try to parse what's on screen; if it isn't a
++  unified diff, the parse fails and we fall back.
++- **Cannot** serve renderings that restructure the diff (delta's default mode,
++  difftastic, side-by-side) — there's no unified-diff line structure left to
++  parse.
++
++> **Prototype finding — two corrections to the coverage below.** Verified
++> empirically by feeding real pager output through gocui's escape parser and
++> running the parser on every line (see §8):
++>
++> - **`delta --color-only` only qualifies *without* line numbers.** With
++>   `--line-numbers` (which is exactly what users who want clickable diffs
++>   enable, since the hyperlinks ride on the gutter), delta keeps the `diff
++>   --git`/`@@`/`---`/`+++` headers but prefixes every body line with a gutter
++>   (`  2 ⋮    │-grape`), pushing the `+`/`-` marker off the start of the line.
++>   So the body reads as all-context and the naive parse is *confidently wrong*,
++>   not merely absent. This is the gutter the §3.1 emit-spec already worried
++>   about — for #1 it's fatal. The fix is an integrity check, not gutter-aware
++>   parsing (see §8); the host stays layout-agnostic and falls back.
++> - **`diff-so-fancy` (even `--patch`) is *not* a #1 case.** It rewrites the
++>   headers (`modified: file`, `@ file:line @`) and **strips the `+`/`-` markers
++>   entirely**, so there's no unified-diff structure left. It belongs in the #2
++>   column with delta's default mode.
++
++`git diff --color` is squarely a #1 case (it only injects ANSI into a standard
++unified diff), **not** a #2 target. `git --word-diff` is the genuine odd one
++out (inline `[-…-]{+…+}` markup, no per-line `+`/`-`); it breaks #1 and would
++need #2 — **out of scope for now**, acceptable to leave unsolved.
++
++### #2 — Pager-emitted metadata (an OSC protocol)
++
++For pagers that restructure the diff (and to avoid re-parsing in general): the
++pager annotates its output with per-line metadata that lazygit reads. This is
++the only path for difftastic-class pagers, and the only way to get full side
++fidelity out of delta's default rendering.
++
++### Coverage
++
++| Rendering | #1 (parse) | #2 (emit) |
++|---|---|---|
++| no pager / `git diff --color` | ✅ | n/a (git won't emit) |
++| `delta --color-only` (no line numbers) | ✅ | ✅ if patched |
++| `delta --color-only --line-numbers` | ❌ (gutter; see note above) | ✅ if patched |
++| `diff-so-fancy` / `--patch` (strips `+`/`-`) | ❌ | ✅ if patched |
++| delta default (color-conveyed side, gutters) | ❌ | ✅ if patched |
++| difftastic / side-by-side | ❌ | ✅ **prototyped, §10** |
++| difftastic / inline | ❌ | ✅ **prototyped, §10** |
++| `git --word-diff` | ❌ | ✅ if patched (out of scope) |
++
++`#2 attachment present → use it; else parse the buffer (#1); else give up
++(no selection).`
++
++---
++
++## 3. #2 design
++
++### 3.1 Carrier: per-cell attachment (host stays layout-agnostic)
++
++The metadata is attached **per cell**, like OSC-8 hyperlinks, **not** per line:
++
++- The pager emits a metadata sequence at the **start of each line** — and
++  **multiple times per line** when a single row shows multiple source regions
++  (twice for side-by-side, N times for difftastic).
++- lazygit attaches each record to the **following cell**. If there is no
++  following cell (a genuinely empty rendered line), it adds a content-less cell
++  to hold the attachment — an established gocui pattern (cf. the `\n` sentinel
++  cell removed in `7dc18f3eb7a4`).
++- **The host never reasons about layout** — no `v.width/2`, no column math, no
++  knowing whether it's side-by-side. It just reads the nearest attachment. This
++  is the key property: all layout knowledge stays in the pager, which is the
++  only thing that has it.
++
++**Access rules** (a principled mirror of the app's keyboard-vs-mouse split, not
++two special cases):
++
++- **`enter`** addresses a *row* (the cursor is row-granular) → use the **first
++  attachment on the row**. In side-by-side this is the left column; fine, since
++  the two sides of a change are one hunk for staging purposes.
++- **click** addresses a *point* → use the **nearest attachment at or to the
++  left of the click x** → lands in the column actually clicked.
++
++**Emit-position spec (interop detail):** the pager emits each region's
++attachment at the **start of that region**, and everything from there until the
++next region's attachment belongs to that record — *including* any line-number
++gutter or other embellishments the pager considers part of the region. Where a
++region "really" starts is the pager's call, not the host's (e.g. in delta's
++side-by-side view everything past the `|` separator is the right side, its line
++numbers included). The only firm requirement: the attachment must precede the
++region's first cell, so search-left lands in the right region.
++
++> Usage note: lazygit is keyboard-centric. Most users press `space` then
++> `enter`, not click; and staging is the only click-reachable op (`e`/`G` are
++> keyboard-only). So column-fidelity is a property the per-cell model gives us
++> for free, not a requirement we paid much for.
++
++### 3.2 Payload
++
++Fields per attachment:
++
++| field | presence | meaning |
++|---|---|---|
++| `version` | always | self-describing (see §3.3) |
++| `type` | always | `context \| added \| deleted` only — header types (`file-header`/`hunk-header`) were considered here but **dropped**; content-lines-only (§11, spec §5.5). (#1's host-side parser still classifies parsed rows internally; that's separate from the #2 wire type.) |
++| `file` | always | absolute or repo-root-relative path (the host normalizes — pagers may emit whichever is convenient); on **every** attachment so search-left yields a complete answer without scanning back to the file header |
++| `new-line` | always (content lines) | new-file line number, in the **diff's** new-file space |
++| `old-line` | **only** when `type = deleted` | old-file line number |
++
++**`type` is load-bearing and cannot be inferred.** Under the coordinate rules,
++`added` and `context` *both* carry `{new-line present, old-line absent}`, so
++presence can't distinguish them — and we must (scroll-preservation anchors on
++change lines, so it has to tell `added` from `context`). Hence an explicit type.
++
++**Why the side must be carried at all** (record this so it isn't "simplified"
++away later): in delta's default rendering there are no `+`/`-` glyphs — side is
++conveyed purely by background color. So a consumer cannot recover it from the
++decolorized row; the pager has to state it.
++
++**`new-line` is in the diff's new-file space**, so the host still runs it
++through `Diff.AdjustLineNumber` before opening the editor, exactly as today
++(the diff may be against staged content rather than the working tree).
++
++### 3.3 Negotiation & extensibility (versioning, not key/value)
++
++- **Env-var handshake:** `EMIT_OSC<n>_METADATA=V1[,V2,…]`. The **host advertises
++  the versions it understands**; the pager emits the highest mutually-understood
++  version. Outside a host the var is unset → the pager emits nothing → trivially
++  harmless in a raw terminal / `less` / `tmux`.
++- **Build the handshake in v1 even with a minimal payload.** Negotiation is the
++  one piece that's *impossible to retrofit* — without it you can't introduce a
++  v2 without a flag day. The payload itself is easy to change later *because*
++  the handshake exists.
++- **Versioning over key/value.** Ignore-unknown key/value only buys *additive*
++  growth; it can't reinterpret an existing field's format. A version field
++  (also carried in each payload, so attachments are self-describing) lets a
++  future v2 redefine the payload wholesale, safely. Keep v1 small and bet on
++  never needing v2. A cheap escape valve short of a version bump: allow optional
++  *trailing* fields within a version (consumers stop at the fields they know) —
++  a supplement, not the strategy.
++- **Wire-safe by construction.** It's a well-formed OSC sequence, so any
++  terminal that doesn't recognize it skips it (gocui already does this via
++  `stateOSCSkipUnknown` in `pkg/gocui/escape.go`; real terminals skip unknown
++  OSC the same way). The metadata flowing through a real terminal must be
++  harmless — this is a hard requirement, since pagers run outside lazygit too.
++
++### 3.4 The OSC number — RESOLVED: `1717`
++
++> **RESOLVED (audit done).** The final number is **`1717`**, replacing the `456`
++> placeholder. There is no central registry; the convention is to pick a high,
++> distinctive number and verify no real terminal *acts on* it (an unknown OSC is
++> skipped by conformant terminals, but a *recognized* one can fire a visible
++> side-effect — e.g. `OSC 555` flashes foot, `OSC 777` raises a desktop
++> notification — which is exactly the wire-safety hazard the audit exists to
++> avoid). Audited the live OSC allocations of **xterm, VTE, kitty, foot, WezTerm,
++> iTerm2, Windows Terminal, Ghostty, VS Code, ConEmu, urxvt**; `1717` collides with
++> none and sits in the large empty 1400–5000 band (only iTerm2's `1337` is nearby).
++> The full danger list is in the spec appendix (`diff-line-metadata-osc-spec.md`).
++> **The prototype code has been renamed `456`→`1717`** across all three repos
++> (delta/difftastic/gocui/lazygit), and the handshake env var is now
++> `EMIT_OSC1717_METADATA`; builds + the metadata unit tests are green in each.
++
++Known-used slots to avoid (verified in the audit): `0–3` (title/icon/X11),
++`4/5/6` (palette/special/tab color), `7` (cwd), `8` (hyperlinks), `9`
++(notifications; `9;4` progress, `9;9` cwd), `10–19` (dynamic colors), `21/22`
++(color query / pointer shape), `46/50/51/52` (logfile/font/Emacs/clipboard), `66`
++(text sizing), `99` (kitty notifications), `104–106`+`110–119` (reset colors),
++`133` (semantic prompt), `176` (foot app id), `555` (foot flash), `633` (VS Code),
++`777` (rxvt notify), `1337` (iTerm2), `5522` (kitty clipboard), `30001/30101`
++(kitty color stack).
++
++### 3.5 Pagers to patch
++
++Small universe, so standardization cost is low and we can supply the patches
++ourselves rather than lobbying: **delta, diff-so-fancy, ydiff, difftastic,
++diffr, riff, git-split-diffs**. delta and difftastic are the high-value targets
++(difftastic because #1 categorically can't serve it). Patching git's own
++`--color` is unnecessary (#1 covers it).
++
++---
++
++## 4. Consumer → field mapping
++
++| consumer | `deleted` | `added` | `context` |
++|---|---|---|---|
++| staging / `enter` (find patch line) | `old-line` | `new-line` | `new-line` |
++| edit `e` (editor target) | `new-line` | `new-line` | `new-line` |
++| PR link `G` (anchor) | `L` + `old-line` | `R` + `new-line` | `R` + `new-line` |
++| hunk-jump | `hunk-header` type (or coordinate discontinuity) | | |
++| scroll-preserve | anchor on a change line via its native coord (`old`/`new`); `type` selects change lines | | |
++
++So `old-line` is used **only** for finding the patch line of a deletion and for
++its PR `L` anchor; `new-line` does everything else (editor for all types,
++patch-find for added/context, PR `R` anchor).
++
++---
++
++## 5. #1 implementation sketch (the host-side fallback — do this first)
++
++- Read the decolorized buffer (`View.Line(y)` upward from the target).
++- Walk up to the nearest `@@` (new-start) and nearest `diff --git` (file);
++  count `+`/space lines down to the target → `new-line`; first char → `type`.
++- Reuse the `patch` package arithmetic; add multi-file (`diff --git`) splitting.
++- Same `(file, type, new-line[, old-line])` result shape as the #2 payload, so
++  the two are interchangeable behind one accessor and the call sites
++  (`GetFileAndLineForClickedDiffLine` and friends) don't care which produced it.
++
++---
++
++## 6. Open questions
++
++- ~~**`new-line` for a deleted line:**~~ **RESOLVED (#1 prototype).** The
++  convention is exactly what `patch.LineNumberOfLine` already computes:
++  `newStart` + #(added/context) above the deletion within the hunk — the
++  new-file position the deletion sits at. Confirmed empirically: two consecutive
++  deletions both report `new-line` = that shared position (e.g. both `2`), and
++  are told apart only by `old-line` (`2` vs `3`). So a deleted line carries
++  *both* numbers; consumers pick (`old-line` for staging-land and the PR `L`
++  anchor, `new-line` for the editor). All pagers must agree on this for #2.
++- ~~**Multi-file split approach:**~~ **RESOLVED (#1 prototype).** Split the
++  buffer on `diff --git` boundaries to isolate the section for the file
++  containing the target row, then `patch.Parse` that single section: its patch
++  line indices line up 1:1 with the section's buffer lines, so the patch line
++  index is just `targetBufferIdx − fileStartIdx`. New/old line numbers and the
++  type then fall straight out of the patch arithmetic. The file path comes from
++  the section's `+++ b/…` line (falling back to `--- a/…`, then `diff --git`).
++- ~~**Do headers carry line numbers?**~~ **RESOLVED — headers carry *nothing*; the
++  spec is content-lines-only (§11 outcome, spec §5.5).** Hunk boundaries are
++  derivable from coordinate discontinuities in the content lines and file
++  boundaries from the `file` field, so header records were dropped entirely rather
++  than carry (or not carry) line numbers.
++- ~~**difftastic specifics:**~~ **RESOLVED (#2 difftastic prototype, §10).** Two
++  regions per row (one per side-by-side column), not N — token-level novelty is
++  sub-cell colouring, not separate identity (§10.3). Each is emitted at the start
++  of its column, before the line-number gutter. The prototype also surfaced a
++  token-vs-line **model mismatch** (§10.2) the unified-diff pagers hid.
++- ~~**v1 wire format:**~~ **RESOLVED (#2 prototype, §9).** Positional, `;`-delimited,
++  `file` last so it may itself contain `;`; an absent `old-line` is the empty field.
++- **Should the pager always emit, or only when the env var is set?** Leaning
++  env-var-gated (zero cost when no consumer wants it; harmless outside a host).
++
++---
++
++## 7. Suggested build order
++
++The prototype is a learning vehicle, not production code: its two jobs are to
++**inform the final OSC spec** (which we want to publish for pager-developer
++feedback) and to **inform a from-scratch production plan**.
++
++> **Status:** steps 1–4 are done and step 5 is end-to-end verified for the
++> NORMAL (unified, single-column) case — see §8 (#1) and §9 (#2). Side-by-side
++> delta is prototyped (focused-main-view-notes.md §17) and **difftastic is
++> prototyped in both modes (§10)** — so the emitter side now spans the full
++> coverage table. What remains of step 5 is the *deliverables*: the **OSC spec
++> draft is written** (`diff-line-metadata-osc-spec.md`, OSC number finalized to
++> `1717` — §3.4 — and it speaks to difftastic's §10.2 model-mismatch finding), ready
++> to circulate to pager developers; what's left is gathering that feedback and
++> writing the production plan. Host *consumption* of side-by-side / difftastic
++> output is still a separate, later step.
++
++Sequence:
++
++1. **#1 prototype first** (§5) — the buffer parser plus the
++   `(file, type, new-line, old-line?)` accessor seam, wired to the
++   focused-main-view consumers, verified across the structure-preserving
++   renderings. Do this first because it:
++   - validates the payload data model cheaply, with **no external deps** — if a
++     field is wrong or
+[…16336ln elided…]
+-d4"))
++	},
++})
+diff --git a/pkg/integration/tests/staging/select_next_hunk_after_staging_from_main_view.go b/pkg/integration/tests/staging/select_next_hunk_after_staging_from_main_view.go
+new file mode 100644
+index 00000000000..c58dfe4747c
+--- /dev/null
++++ b/pkg/integration/tests/staging/select_next_hunk_after_staging_from_main_view.go
+@@ -0,0 +1,48 @@
++package staging
++
++import (
++	"github.com/jesseduffield/lazygit/pkg/config"
++	. "github.com/jesseduffield/lazygit/pkg/integration/components"
++)
++
++var SelectNextHunkAfterStagingFromMainView = NewIntegrationTest(NewIntegrationTestArgs{
++	Description:  "After staging a hunk from the focused main view, the selection advances to the next hunk rather than getting lost",
++	ExtraCmdArgs: []string{},
++	Skip:         false,
++	SetupConfig: func(config *config.AppConfig) {
++		config.GetUserConfig().Gui.UseHunkModeInStagingView = true
++	},
++	SetupRepo: func(shell *Shell) {
++		shell.CreateFileAndAdd("file1", "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n")
++		shell.Commit("one")
++
++		// Two separate change blocks, far enough apart to stay distinct hunks.
++		shell.UpdateFile("file1", "one\ntwo\nTHREE\nfour\nfive\nsix\nseven\neight\nNINE\nten\n")
++	},
++	Run: func(t *TestDriver, keys config.KeybindingConfig) {
++		t.Views().Files().
++			IsFocused().
++			Press(keys.Universal.FocusMainView)
++
++		t.Views().Main().
++			IsFocused().
++			SelectedLines(
++				Contains("-three"),
++				Contains("+THREE"),
++			).
++			PressPrimaryAction().
++			Tap(func() {
++				t.Views().Secondary().
++					ContainsLines(
++						Contains("-three"),
++						Contains("+THREE"),
++					)
++			}).
++			// The selection didn't get lost: it advanced to the next (and now only
++			// remaining) hunk, which is what the unstaged half shows.
++			SelectedLines(
++				Contains("-nine"),
++				Contains("+NINE"),
++			)
++	},
++})
+diff --git a/pkg/integration/tests/staging/select_next_hunk_after_unstaging_from_main_view.go b/pkg/integration/tests/staging/select_next_hunk_after_unstaging_from_main_view.go
+new file mode 100644
+index 00000000000..8608f2940a3
+--- /dev/null
++++ b/pkg/integration/tests/staging/select_next_hunk_after_unstaging_from_main_view.go
+@@ -0,0 +1,52 @@
++package staging
++
++import (
++	"github.com/jesseduffield/lazygit/pkg/config"
++	. "github.com/jesseduffield/lazygit/pkg/integration/components"
++)
++
++var SelectNextHunkAfterUnstagingFromMainView = NewIntegrationTest(NewIntegrationTestArgs{
++	Description:  "After unstaging a hunk from the staged half of the focused main view, the selection advances to the next staged hunk",
++	ExtraCmdArgs: []string{},
++	Skip:         false,
++	SetupConfig: func(config *config.AppConfig) {
++		config.GetUserConfig().Gui.UseHunkModeInStagingView = true
++	},
++	SetupRepo: func(shell *Shell) {
++		shell.CreateFileAndAdd("file1", "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\n")
++		shell.Commit("one")
++
++		// Two staged hunks...
++		shell.UpdateFileAndAdd("file1", "one\ntwo\nTHREE\nfour\nfive\nsix\nseven\neight\nNINE\nten\neleven\n")
++		// ...plus an unstaged change, so the main view splits into staged/unstaged.
++		shell.UpdateFile("file1", "one\ntwo\nTHREE\nfour\nfive\nSIX\nseven\neight\nNINE\nten\neleven\n")
++	},
++	Run: func(t *TestDriver, keys config.KeybindingConfig) {
++		t.Views().Files().
++			IsFocused().
++			Press(keys.Universal.FocusMainView)
++
++		// The unstaged half is focused first; switch to the staged half.
++		t.Views().Main().
++			IsFocused().
++			SelectedLines(
++				Contains("-six"),
++				Contains("+SIX"),
++			).
++			Press(keys.Universal.TogglePanel)
++
++		t.Views().Secondary().
++			IsFocused().
++			SelectedLines(
++				Contains("-three"),
++				Contains("+THREE"),
++			).
++			// Unstage the first staged hunk.
++			PressPrimaryAction().
++			// The selection advances to the next staged hunk rather than getting lost.
++			SelectedLines(
++				Contains("-nine"),
++				Contains("+NINE"),
++			)
++	},
++})
+diff --git a/pkg/integration/tests/staging/select_next_line_after_staging_line_from_main_view.go b/pkg/integration/tests/staging/select_next_line_after_staging_line_from_main_view.go
+new file mode 100644
+index 00000000000..806807d1643
+--- /dev/null
++++ b/pkg/integration/tests/staging/select_next_line_after_staging_line_from_main_view.go
+@@ -0,0 +1,42 @@
++package staging
++
++import (
++	"github.com/jesseduffield/lazygit/pkg/config"
++	. "github.com/jesseduffield/lazygit/pkg/integration/components"
++)
++
++var SelectNextLineAfterStagingLineFromMainView = NewIntegrationTest(NewIntegrationTestArgs{
++	Description:  "In line mode, staging the first line of a block advances the selection to the next line of the same block, not to the next block",
++	ExtraCmdArgs: []string{},
++	Skip:         false,
++	SetupConfig: func(config *config.AppConfig) {
++		config.GetUserConfig().Gui.UseHunkModeInStagingView = false
++	},
++	SetupRepo: func(shell *Shell) {
++		shell.CreateFileAndAdd("file1", "1\n2\n3\n4\n5\n6\n7\n8\n9\n")
++		shell.Commit("one")
++
++		// A three-line added block near the top, and a separate change block further
++		// down (so "next block" is a distinct, wrong target for line mode).
++		shell.UpdateFile("file1", "1\n2\nA\nB\nC\n3\n4\n5\n6\nX\n8\n9\n")
++	},
++	Run: func(t *TestDriver, keys config.KeybindingConfig) {
++		t.Views().Files().
++			IsFocused().
++			Press(keys.Universal.FocusMainView)
++
++		// Default (line) mode: the first added line is selected.
++		t.Views().Main().
++			IsFocused().
++			SelectedLines(
++				Contains("+A"),
++			).
++			// Stage just that line.
++			PressPrimaryAction().
++			// The selection advances to the next line of the same block, not to the
++			// distant change block below.
++			SelectedLines(
++				Contains("+B"),
++			)
++	},
++})
+diff --git a/pkg/integration/tests/staging/stage_from_main_view_with_conforming_pager.go b/pkg/integration/tests/staging/stage_from_main_view_with_conforming_pager.go
+new file mode 100644
+index 00000000000..6a2274ef08e
+--- /dev/null
++++ b/pkg/integration/tests/staging/stage_from_main_view_with_conforming_pager.go
+@@ -0,0 +1,65 @@
++package staging
++
++import (
++	"github.com/jesseduffield/lazygit/pkg/config"
++	. "github.com/jesseduffield/lazygit/pkg/integration/components"
++)
++
++var StageFromMainViewWithConformingPager = NewIntegrationTest(NewIntegrationTestArgs{
++	Description:  "Focus the main view under a pager that announces the diff-metadata protocol (a handshake); its output is trusted, so the diff is not re-rendered raw and staging works on it",
++	ExtraCmdArgs: []string{},
++	Skip:         false,
++	SetupConfig: func(cfg *config.AppConfig) {
++		cfg.GetUserConfig().Gui.UseHunkModeInStagingView = false
++		// A fake conforming pager: it emits the version-only OSC 1717 handshake as its
++		// first output (announcing it speaks the protocol), prints a marker line so the
++		// test can tell its output apart from the raw diff, then passes the diff through
++		// unchanged. The probe finds the handshake and trusts the pager, so focusing
++		// does not fall back to the raw diff. (The passed-through diff is structurally
++		// intact, so the selection still resolves via the buffer parser.)
++		cfg.GetUserConfig().Git.Pagers = []config.PagingConfig{
++			{Pager: "printf '\\033]1717;1\\007CONFORMING-PAGER\\n'; cat"},
++		}
++	},
++	SetupRepo: func(shell *Shell) {
++		shell.CreateFileAndAdd("file1", "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n")
++		shell.Commit("one")
++
++		shell.UpdateFile("file1", "one\ntwo\nTHREE\nfour\nfive\nsix\nseven\neight\nNINE\nten\n")
++	},
++	Run: func(t *TestDriver, keys config.KeybindingConfig) {
++		t.Views().Files().
++			IsFocused().
++			Lines(
++				Contains("file1").IsSelected(),
++			)
++
++		// The handshake is swallowed (it leaves no visible bytes), but the pager's
++		// marker line proves its output is what's shown.
++		t.Views().Main().Content(Contains("CONFORMING-PAGER"))
++
++		t.Views().Files().Press(keys.Universal.FocusMainView)
++
++		// Focusing did not re-render raw — the marker is still there — and the selection
++		// resolved on the pager's (structure-preserving) output.
++		t.Views().Main().
++			IsFocused().
++			Content(Contains("CONFORMING-PAGER")).
++			SelectedLines(
++				Contains("-three"),
++			).
++			Press(keys.Main.ToggleSelectHunk).
++			SelectedLines(
++				Contains("-three"),
++				Contains("+THREE"),
++			).
++			PressPrimaryAction().
++			Tap(func() {
++				t.Views().Secondary().
++					ContainsLines(
++						Contains("-three"),
++						Contains("+THREE"),
++					)
++			})
++	},
++})
+diff --git a/pkg/integration/tests/staging/stage_from_main_view_with_unsupported_pager.go b/pkg/integration/tests/staging/stage_from_main_view_with_unsupported_pager.go
+new file mode 100644
+index 00000000000..175fa7ba8b5
+--- /dev/null
++++ b/pkg/integration/tests/staging/stage_from_main_view_with_unsupported_pager.go
+@@ -0,0 +1,68 @@
++package staging
++
++import (
++	"github.com/jesseduffield/lazygit/pkg/config"
++	. "github.com/jesseduffield/lazygit/pkg/integration/components"
++)
++
++var StageFromMainViewWithUnsupportedPager = NewIntegrationTest(NewIntegrationTestArgs{
++	Description:  "Focus the main view under a pager that restructures the diff without emitting metadata; it falls back to the raw diff so the selection is still stageable",
++	ExtraCmdArgs: []string{},
++	Skip:         false,
++	SetupConfig: func(cfg *config.AppConfig) {
++		cfg.GetUserConfig().Gui.UseHunkModeInStagingView = false
++		// `cat -n` prepends a line number to every line, which pushes the diff's +/-
++		// markers off the start of the line: the buffer parser can't resolve it, and
++		// cat emits no metadata, so the focused main view must fall back to the raw diff.
++		cfg.GetUserConfig().Git.Pagers = []config.PagingConfig{
++			{Pager: "cat -n"},
++		}
++	},
++	SetupRepo: func(shell *Shell) {
++		shell.CreateFileAndAdd("file1", "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n")
++		shell.Commit("one")
++
++		// Two separate change blocks, so staging one leaves the file split (the other
++		// stays unstaged) and the staged side renders into the secondary view.
++		shell.UpdateFile("file1", "one\ntwo\nTHREE\nfour\nfive\nsix\nseven\neight\nNINE\nten\n")
++	},
++	Run: func(t *TestDriver, keys config.KeybindingConfig) {
++		// While browsing, the main view shows the pager's output: `cat -n` has numbered
++		// every line (the first being the `diff --git` header), so the diff isn't in
++		// its raw form.
++		t.Views().Files().
++			IsFocused().
++			Lines(
++				Contains("file1").IsSelected(),
++			)
++		t.Views().Main().Content(Contains("1  diff --git a/file1 b/file1"))
++
++		// Focusing the main view falls back to the raw diff, so the change line is
++		// resolved and selected (the pager's line numbers are gone).
++		t.Views().Files().Press(keys.Universal.FocusMainView)
++
++		t.Views().Main().
++			IsFocused().
++			SelectedLines(
++				Contains("-three"),
++			).
++			Press(keys.Main.ToggleSelectHunk).
++			SelectedLines(
++				Contains("-three"),
++				Contains("+THREE"),
++			).
++			PressPrimaryAction().
++			Tap(func() {
++				t.Views().Secondary().
++					ContainsLines(
++						Contains("-three"),
++						Contains("+THREE"),
++					)
++			}).
++			// The other block stays unstaged, also shown raw.
++			ContainsLines(
++				Contains("-nine"),
++				Contains("+NINE"),
++			)
++	},
++})
+diff --git a/pkg/integration/tests/staging/stage_hunk_from_main_view.go b/pkg/integration/tests/staging/stage_hunk_from_main_view.go
+new file mode 100644
+index 00000000000..e027675a7bc
+--- /dev/null
++++ b/pkg/integration/tests/staging/stage_hunk_from_main_view.go
+@@ -0,0 +1,55 @@
++package staging
++
++import (
++	"github.com/jesseduffield/lazygit/pkg/config"
++	. "github.com/jesseduffield/lazygit/pkg/integration/components"
++)
++
++var StageHunkFromMainView = NewIntegrationTest(NewIntegrationTestArgs{
++	Description:  "Select a hunk in the focused main view and stage it, without diving into the staging view",
++	ExtraCmdArgs: []string{},
++	Skip:         false,
++	SetupConfig: func(config *config.AppConfig) {
++		config.GetUserConfig().Gui.UseHunkModeInStagingView = false
++	},
++	SetupRepo: func(shell *Shell) {
++		shell.CreateFileAndAdd("file1", "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n")
++		shell.Commit("one")
++
++		// Two separate change blocks, far enough apart to stay distinct hunks.
++		shell.UpdateFile("file1", "one\ntwo\nTHREE\nfour\nfive\nsix\nseven\neight\nNINE\nten\n")
++	},
++	Run: func(t *TestDriver, keys config.KeybindingConfig) {
++		t.Views().Files().
++			IsFocused().
++			Lines(
++				Contains("file1").IsSelected(),
++			).
++			Press(keys.Universal.FocusMainView)
++
++		t.Views().Main().
++			IsFocused().
++			SelectedLines(
++				Contains("-three"),
++			).
++			// `a` extends the selection to the whole change block around the cursor.
++			Press(keys.Main.ToggleSelectHunk).
++			SelectedLines(
++				Contains("-three"),
++				Contains("+THREE"),
++			).
++			PressPrimaryAction().
++			Tap(func() {
++				t.Views().Secondary().
++					ContainsLines(
++						Contains("-three"),
++						Contains("+THREE"),
++					)
++			}).
++			// The other block is still unstaged.
++			ContainsLines(
++				Contains("-nine"),
++				Contains("+NINE"),
++			)
++	},
++})
+diff --git a/pkg/integration/tests/staging/stage_range_from_main_view.go b/pkg/integration/tests/staging/stage_range_from_main_view.go
+new file mode 100644
+index 00000000000..058afc9a86a
+--- /dev/null
++++ b/pkg/integration/tests/staging/stage_range_from_main_view.go
+@@ -0,0 +1,66 @@
++package staging
++
++import (
++	"github.com/jesseduffield/lazygit/pkg/config"
++	. "github.com/jesseduffield/lazygit/pkg/integration/components"
++)
++
++var StageRangeFromMainView = NewIntegrationTest(NewIntegrationTestArgs{
++	Description:  "Select a range of diff lines in the focused main view and stage it, without diving into the staging view",
++	ExtraCmdArgs: []string{},
++	Skip:         false,
++	SetupConfig: func(config *config.AppConfig) {
++		config.GetUserConfig().Gui.UseHunkModeInStagingView = false
++	},
++	SetupRepo: func(shell *Shell) {
++		shell.CreateFileAndAdd("file1", "one\ntwo\nthree\n")
++		shell.Commit("one")
++
++		shell.UpdateFile("file1", "ONE\ntwo\nthree\nfour\nfive\nsix\n")
++	},
++	Run: func(t *TestDriver, keys config.KeybindingConfig) {
++		t.Views().Files().
++			IsFocused().
++			Lines(
++				Contains("file1").IsSelected(),
++			).
++			Press(keys.Universal.FocusMainView)
++
++		// Focusing the main view selects the first change line (a single line).
++		t.Views().Main().
++			IsFocused().
++			SelectedLines(
++				Contains("-one"),
++			).
++			// Select a range with `v` and extend it down past the modified line and
++			// some context, then stage it.
++			Press(keys.Universal.ToggleRangeSelect).
++			NavigateToLine(Contains("+four")).
++			SelectedLines(
++				Contains("-one"),
++				Contains("+ONE"),
++				Contains(" two"),
++				Contains(" three"),
++				Contains("+four"),
++			).
++			PressPrimaryAction().
++			Tap(func() {
++				// The selected change lines — the deletion, the addition replacing it,
++				// and the added 'four' — are now staged; the context lines came along
++				// but aren't themselves staged.
++				t.Views().Secondary().
++					ContainsLines(
++						Contains("-one"),
++						Contains("+ONE"),
++						Contains(" two"),
++						Contains(" three"),
++						Contains("+four"),
++					)
++			}).
++			// The unstaged half holds only the additions we didn't select.
++			ContainsLines(
++				Contains("+five"),
++				Contains("+six"),
++			)
++	},
++})
+diff --git a/pkg/integration/tests/staging/stage_range_spanning_files_from_main_view.go b/pkg/integration/tests/staging/stage_range_spanning_files_from_main_view.go
+new file mode 100644
+index 00000000000..e8554006998
+--- /dev/null
++++ b/pkg/integration/tests/staging/stage_range_spanning_files_from_main_view.go
+@@ -0,0 +1,53 @@
++package staging
++
++import (
++	"github.com/jesseduffield/lazygit/pkg/config"
++	. "github.com/jesseduffield/lazygit/pkg/integration/components"
++)
++
++var StageRangeSpanningFilesFromMainView = NewIntegrationTest(NewIntegrationTestArgs{
++	Description:  "Select a range spanning two files in a directory's focused main view and stage it in one go",
++	ExtraCmdArgs: []string{},
++	Skip:         false,
++	SetupConfig: func(config *config.AppConfig) {
++		config.GetUserConfig().Gui.UseHunkModeInStagingView = false
++	},
++	SetupRepo: func(shell *Shell) {
++		shell.CreateFileAndAdd("a", "a\n")
++		shell.CreateFileAndAdd("b", "b\n")
++		shell.Commit("one")
++
++		shell.UpdateFile("a", "a\nfromA\n")
++		shell.UpdateFile("b", "b\nfromB\n")
++	},
++	Run: func(t *TestDriver, keys config.KeybindingConfig) {
++		// The root node is selected, so the focused main view shows both files' diffs.
++		t.Views().Files().
++			IsFocused().
++			Lines(
++				Contains("▼ /").IsSelected(),
++				Contains(" M a"),
++				Contains(" M b"),
++			).
++			Press(keys.Universal.FocusMainView)
++
++		t.Views().Main().
++			IsFocused().
++			SelectedLines(
++				Contains("+fromA"),
++			).
++			// Select a range reaching from the addition in the first file into the
++			// addition in the second, then stage it.
++			Press(keys.Universal.ToggleRangeSelect).
++			NavigateToLine(Contains("+fromB")).
++			PressPrimaryAction().
++			Tap(func() {
++				// Both files' additions got staged in one go.
++				t.Views().Files().Lines(
++					Contains("▼ /"),
++					Contains("M  a"),
++					Contains("M  b"),
++				)
++			})
++	},
++})
+diff --git a/pkg/integration/tests/test_list.go b/pkg/integration/tests/test_list.go
+index 8213d51592f..4e954ab70a0 100644
+--- a/pkg/integration/tests/test_list.go
++++ b/pkg/integration/tests/test_list.go
+@@ -352,9 +352,15 @@ var tests = []*components.IntegrationTest{
+ 	patch_building.ApplyInReverseWithConflict,
+ 	patch_building.ApplyWithModifiedFileConflict,
+ 	patch_building.ApplyWithModifiedFileNoConflict,
++	patch_building.BuildFromMainView,
++	patch_building.BuildFromMainViewWithUnsupportedPager,
++	patch_building.BuildFromWholeCommitMainView,
++	patch_building.BuildMultiFileFromWholeCommitMainView,
+ 	patch_building.CopyRenamedFileDiff,
+ 	patch_building.DiscardLinesFromCommit,
++	patch_building.DiscardLinesFromCommitMainView,
+ 	patch_building.EditLineInPatchBuildingPanel,
++	patch_building.KeepSelectionAfterMovingPatchOutMainView,
+ 	patch_building.MoveRangeToIndex,
+ 	patch_building.MoveToEarlierCommit,
+ 	patch_building.MoveToEarlierCommitFromAddedFile,
+@@ -374,10 +380,12 @@ var tests = []*components.IntegrationTest{
+ 	patch_building.MoveToNewCommitInLastCommitOfStackedBranch,
+ 	patch_building.MoveToNewCommitPartialHunk,
+ 	patch_building.RemoveFromCommit,
++	patch_building.RemoveLinesFromMainViewSecondary,
+ 	patch_building.RemovePartsOfAddedFile,
+ 	patch_building.RenameSimilarityThresholdChange,
+ 	patch_building.RenamedFilePartial,
+ 	patch_building.RenamedFileWhole,
++	patch_building.ResetPatchBuiltFromMainView,
+ 	patch_building.ResetWithEscape,
+ 	patch_building.SelectAllFiles,
+ 	patch_building.SpecificSelection,
+@@ -396,17 +404,36 @@ var tests = []*components.IntegrationTest{
+ 	shell_commands.EditHistory,
+ 	shell_commands.History,
+ 	shell_commands.OmitFromHistory,
++	staging.AdvanceToNextHunkAfterStagingShiftsLineNumbers,
++	staging.CopyFromMainView,
+ 	staging.DiffChangeScreenMode,
+ 	staging.DiffContextChange,
+ 	staging.DiscardAllChanges,
++	staging.DiscardFromMainView,
++	staging.DiscardFromStagedMainView,
++	staging.FocusFollowsStagedSideToSecondaryAfterUnstaging,
++	staging.FocusReturnsToMainAfterUnstagingLastStagedHunk,
++	staging.HideSelectionAfterDiscardingLastChange,
++	staging.NoSelectionWhenNoChanges,
+ 	staging.Search,
++	staging.SelectHunkOnFocusingMainView,
++	staging.SelectNextChangeAfterUnstagingADeletion,
++	staging.SelectNextDeletionAfterStagingWithinABlock,
++	staging.SelectNextHunkAfterStagingFromMainView,
++	staging.SelectNextHunkAfterUnstagingFromMainView,
+ 	staging.SelectNextLineAfterStagingInTwoHunkDiff,
+ 	staging.SelectNextLineAfterStagingIsolatedAddedLine,
++	staging.SelectNextLineAfterStagingLineFromMainView,
++	staging.StageFromMainViewWithConformingPager,
++	staging.StageFromMainViewWithUnsupportedPager,
++	staging.StageHunkFromMainView,
+ 	staging.StageHunks,
+ 	staging.StageLines,
+ 	staging.StagePartialBlockOfChangesFirstLines,
+ 	staging.StagePartialBlockOfChangesLastLines,
+ 	staging.StagePartialBlockOfChangesMiddleLines,
++	staging.StageRangeFromMainView,
++	staging.StageRangeSpanningFilesFromMainView,
+ 	staging.StageRanges,
+ 	stash.Apply,
+ 	stash.ApplyPatch,
+@@ -502,6 +529,7 @@ var tests = []*components.IntegrationTest{
+ 	undo.UndoCheckoutAndDrop,
+ 	undo.UndoCommit,
+ 	undo.UndoDrop,
++	undo.UndoKeepsFocusedMainViewSelection,
+ 	worktree.AddForExistingBranch,
+ 	worktree.AddFromBranch,
+ 	worktree.AddFromBranchDetached,
+diff --git a/pkg/integration/tests/undo/undo_keeps_focused_main_view_selection.go b/pkg/integration/tests/undo/undo_keeps_focused_main_view_selection.go
+new file mode 100644
+index 00000000000..e3e85629ecd
+--- /dev/null
++++ b/pkg/integration/tests/undo/undo_keeps_focused_main_view_selection.go
+@@ -0,0 +1,86 @@
++package undo
++
++import (
++	"github.com/jesseduffield/lazygit/pkg/config"
++	. "github.com/jesseduffield/lazygit/pkg/integration/components"
++)
++
++var UndoKeepsFocusedMainViewSelection = NewIntegrationTest(NewIntegrationTestArgs{
++	Description:  "Undoing a commit rewrite while focused in the main view re-establishes the (stale, multi-line) selection on a surviving change rather than leaving it painted over the changed diff",
++	ExtraCmdArgs: []string{},
++	Skip:         false,
++	SetupConfig: func(config *config.AppConfig) {
++		config.GetUserConfig().Gui.UseHunkModeInStagingView = false
++	},
++	SetupRepo: func(shell *Shell) {
++		shell.EmptyCommit("first commit")
++
++		shell.CreateFileAndAdd("file1", "one\ntwo\nthree\nfour\nfive\n")
++		shell.Commit("commit to rewrite")
++	},
++	Run: func(t *TestDriver, keys config.KeybindingConfig) {
++		t.Views().Commits().
++			Focus().
++			Lines(
++				Contains("commit to rewrite").IsSelected(),
++				Contains("first commit"),
++			).
++			// Focus the commit's diff straight from the commits panel.
++			Press(keys.Universal.FocusMainView)
++
++		// Discard the first line from the commit; the selection advances to the next
++		// surviving change ('two').
++		t.Views().Main().
++			IsFocused().
++			SelectedLines(
++				Contains("+one"),
++			).
++			Press(keys.Universal.Remove)
++
++		t.ExpectPopup().Confirmation().
++			Title(Equals("Discard lines from commit")).
++			Content(Equals("Are you sure you want to discard the selected lines from this commit?")).
++			Confirm()
++
++		t.Views().Main().
++			IsFocused().
++			Content(DoesNotContain("+one")).
++			SelectedLines(
++				Contains("+two"),
++			).
++			// Leave a multi-line range selected before undoing — undo rewrites the commit
++			// outside the focused-main-view action handlers, so without the preserve net
++			// this range would be left stale over the restored diff.
++			Press(keys.Universal.ToggleRangeSelect).
++			NavigateToLine(Contains("+four")).
++			SelectedLines(
++				Contains("+two"),
++				Contains("+three"),
++				Contains("+four"),
++			)
++
++		// Undo is a global keybinding, so it fires while the main view holds focus.
++		t.GlobalPress(keys.Universal.Undo)
++
++		t.ExpectPopup().Confirmation().
++			Title(Equals("Undo")).
++			Content(MatchesRegexp(`Are you sure you want to hard reset to '.*'\?`)).
++			Confirm()
++
++		// The discarded line is back, and the stale multi-line range collapses to a
++		// single surviving change at the selection's top ordinal (the first change line,
++		// now 'one' again) rather than spanning arbitrary lines of the restored diff.
++		t.Views().Main().
++			IsFocused().
++			ContainsLines(
++				Equals("+one"),
++				Equals("+two"),
++				Equals("+three"),
++				Equals("+four"),
++				Equals("+five"),
++			).
++			SelectedLines(
++				Contains("+one"),
++			)
++	},
++})
+diff --git a/pkg/tasks/tasks.go b/pkg/tasks/tasks.go
+index 3a964c838c3..6ecaf5b9035 100644
+--- a/pkg/tasks/tasks.go
++++ b/pkg/tasks/tasks.go
+@@ -6,6 +6,7 @@ import (
+ 	"io"
+ 	"os"
+ 	"os/exec"
++	"strconv"
+ 	"sync"
+ 	"sync/atomic"
+ 	"time"
+@@ -66,13 +67,47 @@ type ViewBufferManager struct {
+ 	// thread; nil when no task is running.
+ 	readLines atomic.Pointer[chan LinesToRead]
+ 	taskKey   string
+-	onNewKey  func()
++
++	// Resets the view's scroll position to the top. A render whose content is
++	// different from what the view last showed (a different command key) calls
++	// this — but at its *first paint*, not when the task starts: the off-screen
++	// render leaves the previous content displayed until the swap, so resetting
++	// the origin up front would scroll that still-displayed content to the top
++	// before the new content replaces it. See LinesToRead.ResetOrigin.
++	resetOrigin func()
++
++	// When non-nil, the next cmd/pty task re-establishes the view's scroll
++	// position and selection once it has re-rendered the content (returning to a
++	// focused main view on escape). The task does not reset the view's origin to
++	// the top at start: instead it keeps the placeholder showing at its current
++	// scroll until the restore can show the saved position as part of the first
++	// paint, rather than flicking to the top. See RenderRestore.
++	//
++	// It is set just before triggering the re-render. Unlike a per-task field, it
++	// is *not* cleared when a task starts: it must survive a task being stopped
++	// and replaced (a periodic refresh can stop the escape's re-render before it
++	// first-paints), so it is kept until a task successfully applies it, or until
++	// the content key changes (a different item was selected, so the saved
++	// position no longer applies). Guarded by taskIDMutex, like the task key.
++	restoreForNextTask *RenderRestore
++
++	// Whether a command task is currently reading content into the view. While
++	// this is true the content is still growing, so callers (e.g. the layout)
++	// must not clamp the view's scroll position to the amount loaded so far.
++	loading atomic.Bool
+ 
+ 	// beforeStart is the function that is called before starting a new task
+ 	beforeStart  func()
+ 	refreshView  func()
+ 	onEndOfInput func()
+ 
++	// beginRender starts an off-screen render: the new content is built without
++	// disturbing what's displayed. swapInRender then promotes it to the display
++	// in one step. Together they keep the view showing the previous render until
++	// the new one has read enough to paint, instead of revealing it line by line.
++	beginRender  func()
++	swapInRender func()
++
+ 	// see docs/dev/Busy.md
+ 	// A gocui task is not the same thing as the tasks defined in this file.
+ 	// A gocui task simply represents the fact that lazygit is busy doing something,
+@@ -106,10 +141,49 @@ type LinesToRead struct {
+ 	// subsequent requests.
+ 	InitialRefreshAfter int
+ 
++	// When set, re-establishes the view's scroll position and selection as the
++	// re-render first paints (returning to a focused main view on escape). When
++	// set, it — rather than InitialRefreshAfter — also decides when the first
++	// paint happens, since the saved position may be reachable only after more
++	// than a screenful has loaded. Only set for the initial read request. See
++	// RenderRestore.
++	Restore *RenderRestore
++
++	// When true, the view's scroll position is reset to the top at the first paint
++	// (the swap), because this render's content differs from what the view last
++	// showed. Set for a new command key with no Restore; left false when
++	// re-rendering the same content (keep the scroll) or when a Restore will place
++	// the scroll itself. Doing it at the first paint rather than at task start
++	// keeps the previous content, still displayed off-screen until the swap, from
++	// visibly jumping to the top first.
++	ResetOrigin bool
++
+ 	// Function to call after reading the lines is done
+ 	Then func()
+ }
+ 
++// RenderRestore re-establishes a view's scroll position and selection after it
++// re-renders content the user was already looking at (returning to a focused main
++// view on escape). The render task reads the new content into an off-screen
++// buffer; RenderRestore decides, as that buffer fills, when the task has read far
++// enough to show the saved position (FirstPaintReady), and then locates the target
++// and reveals it (Apply). It is a predicate rather than a fixed scroll position so
++// the target can be a row matching a patch identity, located by scanning the
++// loading content, rather than a line number that the changed content may have moved.
++type RenderRestore struct {
++	// FirstPaintReady reports whether the task has now read enough of the new
++	// (off-screen) content to first-paint at the saved position. Evaluated after
++	// each line is read.
++	FirstPaintReady func() bool
++
++	// Apply runs once at the first paint. It locates the target in the not-yet-
++	// displayed off-screen content, then calls swapIn to promote that content to
++	// the display and settles the scroll/selection onto the target. Doing the
++	// (potentially whole-diff) scan before swapIn keeps the previous content shown
++	// while it runs, so the new content is never briefly drawn at the old scroll.
++	Apply func(swapIn func())
++}
++
+ func (self *ViewBufferManager) GetTaskKey() string {
+ 	return self.taskKey
+ }
+@@ -120,7 +194,9 @@ func NewViewBufferManager(
+ 	beforeStart func(),
+ 	refreshView func(),
+ 	onEndOfInput func(),
+-	onNewKey func(),
++	resetOrigin func(),
++	beginRender func(),
++	swapInRender func(),
+ 	newGocuiTask func() gocui.Task,
+ 	onUIThread func(f func() error) error,
+ ) *ViewBufferManager {
+@@ -130,7 +206,9 @@ func NewViewBufferManager(
+ 		beforeStart:  beforeStart,
+ 		refreshView:  refreshView,
+ 		onEndOfInput: onEndOfInput,
+-		onNewKey:     onNewKey,
++		resetOrigin:  resetOrigin,
++		beginRender:  beginRender,
++		swapInRender: swapInRender,
+ 		newGocuiTask: newGocuiTask,
+ 		onUIThread:   onUIThread,
+ 	}
+@@ -149,6 +227,57 @@ func (self *ViewBufferManager) ReadLines(totalLines int) {
+ 	}
+ }
+ 
++// SetRestoreForNextTask makes the next cmd/pty task re-establish the view's
++// scroll position and selection once it has re-rendered the content. Call this
++// right before triggering a re-render of content the view was already showing
++// (returning to a focused main view on escape). See the field doc and RenderRestore.
++func (self *ViewBufferManager) SetRestoreForNextTask(restore *RenderRestore) {
++	self.taskIDMutex.Lock()
++	defer self.taskIDMutex.Unlock()
++
++	self.restoreForNextTask = restore
++}
++
++// GetRestoreForNextTask returns the pending restore, or nil. It is not gated on
++// the command key: returning to a focused main view after staging changes the
++// command (e.g. the unstaged diff becomes the staged one once the last unstaged
++// hunk is gone), yet the line to land on is still in the new content. The restore
++// validates itself instead — its scan simply doesn't find the target line when
++// the content no longer contains it (a different item was selected), in which case
++// applying it is a no-op. So it is safe to hand to whatever renders next.
++func (self *ViewBufferManager) GetRestoreForNextTask() *RenderRestore {
++	self.taskIDMutex.Lock()
++	defer self.taskIDMutex.Unlock()
++
++	return self.restoreForNextTask
++}
++
++// ClearRestoreForNextTask drops the pending restore. A task clears it once it has
++// first-painted and applied it (whether or not it found its target line), so that
++// it lives for exactly one re-render — surviving a task being stopped and replaced
++// before it could paint, but not re-applying on every later render.
++func (self *ViewBufferManager) ClearRestoreForNextTask() {
++	self.taskIDMutex.Lock()
++	defer self.taskIDMutex.Unlock()
++
++	self.restoreForNextTask = nil
++}
++
++// IsLoading reports whether a command task is currently reading content into the
++// view, meaning the content is still growing.
++func (self *ViewBufferManager) IsLoading() bool {
++	return self.loading.Load()
++}
++
++// StartLoading marks the view as loading content. It must be called
++// synchronously when a command/pty task is started, before the task's goroutine
++// runs, so that a layout pass happening in between doesn't clamp the scroll
++// position to the not-yet-loaded content. It is cleared when the task reaches
++// the end of its input.
++func (self *ViewBufferManager) StartLoading() {
++	self.loading.Store(true)
++}
++
+ func (self *ViewBufferManager) ReadToEnd(then func()) {
+ 	if ch := self.readLines.Load(); ch != nil {
+ 		readLines := *ch
+@@ -272,6 +401,13 @@ func (self *ViewBufferManager) NewCmdTask(start func() (Cmd, io.Reader), prefix
+ 				loadingMutex.Lock()
+ 				if !loaded {
+ 					self.beforeStart()
++					// beforeStart cleared the previous content to show "loading...". If
++					// this is new content, reset the scroll to the top now so the message
++					// is visible (beforeStart doesn't touch the origin); for a same-content
++					// re-render we keep the scroll, as the first paint will too.
++					if linesToRead.ResetOrigin && self.resetOrigin != nil {
++						self.resetOrigin()
++					}
+ 					_, _ = self.writer.Write([]byte("loading..."))
+ 					self.refreshView()
+ 				}
+@@ -312,6 +448,47 @@ func (self *ViewBufferManager) NewCmdTask(start func() (Cmd, io.Reader), prefix
+ 			// this to work out how many more lines, if any, we still need to read.
+ 			linesRead := 0
+ 
++			// The first paint swaps the off-screen render in to reveal the new
++			// content, and settles the scroll position in the same step — so the new
++			// content first appears already where it belongs. A restore (returning to
++			// a focused main view on escape, see RenderRestore) scrolls to its saved
++			// position and restores the selection; otherwise, if this is new content
++			// (ResetOrigin), the scroll resets to the top. Either way it happens at
++			// the swap, not before, so the previous content — displayed until the swap
++			// — doesn't visibly jump first. firstPaint happens once, either when we've
++			// read far enough (below) or at end of input for content shorter than that.
++			restore := linesToRead.Restore
++			painted := false
++			firstPaint := func() {
++				if painted {
++					return
++				}
++				painted = true
++				if restore != nil {
++					// Apply locates the target in the off-screen content, swaps it in,
++					// and settles the scroll in one step — so the scan it may run first
++					// happens while the previous content is still displayed, never the
++					// new content at the old scroll.
++					restore.Apply(self.swapInRender)
++				} else {
++					self.swapInRender()
++					if linesToRead.ResetOrigin && self.resetOrigin != nil {
++						self.resetOrigin()
++					}
++				}
++			}
++
++			// Set LAZYGIT_SLOW_RENDER=<milliseconds> to sleep that long after each
++			// line is written to the view, stretching async loads out so the frames
++			// of a re-render become visible. Useful for debugging scroll/flicker
++			// behaviour; has no effect when the variable is unset.
++			var slowRenderPerLine time.Duration
++			if v := os.Getenv("LAZYGIT_SLOW_RENDER"); v != "" {
++				if ms, err := strconv.Atoi(v); err == nil {
++					slowRenderPerLine = time.Duration(ms) * time.Millisecond
++				}
++			}
++
+ 		outer:
+ 			for {
+ 				if stopped() {
+@@ -343,7 +520,10 @@ func (self *ViewBufferManager) NewCmdTask(start func() (Cmd, io.Reader), prefix
+ 
+ 						loadingMutex.Lock()
+ 						if !loaded {
+-							self.beforeStart()
++							// Build the new content off-screen, leaving the previous render
++							// displayed until we swap in below; this is what keeps an async
++							// re-render from showing a half-loaded buffer.
++							self.beginRender()
+ 							if prefix != "" {
+ 								writeToView([]byte(prefix))
+ 							}
+@@ -352,27 +532,84 @@ func (self *ViewBufferManager) NewCmdTask(start func() (Cmd, io.Reader), prefix
+ 						loadingMutex.Unlock()
+ 
+ 						if !ok {
+-							// if we're here then there's nothing left to scan from the source
+-							// so we're at the EOF and can flush the stale content.
++							// lineChan is closed. At a genuine end of input we swap in what we
++							// read and finalize. But lineChan is also closed when this task has
++							// been stopped to make way for a newer one: stopping closes
++							// opts.Stop, and the scanner goroutine then closes lineChan, so the
++							// select above can land here instead of on the opts.Stop case. A
++							// stopped task is being replaced and must leave the view to the
++							// incoming task — swapping in its half-read buffer, applying the
++							// saved scroll, clamping the origin, or clearing `loading` would all
++							// corrupt what that task is about to render. So bail out here, the
++							// same as the explicit stop case above.
++							select {
++							case <-opts.Stop:
++								break outer
++							default:
++							}
++							// Genuine end of input: do the first paint now if it hasn't happened
++							// yet — the content was shorter than the first-paint point, or a
++							// restore's target line was never found. firstPaint swaps in whatever
++							// we read and, for a restore, scrolls to the saved position before
++							// onEndOfInput clamps the origin back into range for short content.
+ 							// onEndOfInput reads the view's dimensions (to decide
+ 							// whether to scroll) and sets the origin, both of which
+ 							// are UI-thread-only, so run it there.
+ 							_ = self.onUIThread(func() error {
++								firstPaint()
+ 								self.onEndOfInput()
+ 								return nil
+ 							})
++							// The content is fully loaded now, so it's safe again for the
++							// layout to clamp the scroll position to it. We deliberately
++							// don't clear this when stopped (rather than EOF'd), because that
++							// means a newer task is taking over and is still loading.
++							self.loading.Store(false)
+ 							callThen()
++							// Any read requests that were queued while we were reading are
++							// now trivially satisfied, since we've read everything. Fire
++							// their callbacks instead of dropping them when we break out of
++							// the loop below (and nil out readLines).
++						drain:
++							for {
++								select {
++								case queued := <-*self.readLines.Load():
++									if queued.Then != nil {
++										queued.Then()
++									}
++								default:
++									break drain
++								}
++							}
+ 							break outer
+ 						}
+ 						writeToView(append(line, '\n'))
+ 						lineWrittenChan <- struct{}{}
+ 						linesRead++
+ 
+-						if linesRead == linesToRead.InitialRefreshAfter {
+-							// We have read enough lines to fill the view, so do a first refresh
+-							// here to show what we have. Continue reading and refresh again at
+-							// the end to make sure the scrollbar has the right size.
+-							refreshViewIfStale()
++						if slowRenderPerLine > 0 {
++							time.Sleep(slowRenderPerLine)
++						}
++
++						// Do the first paint as soon as we've read far enough: for a restore,
++						// when it can show the saved position (RenderRestore.FirstPaintReady,
++						// e.g. its target line plus a screenful below it have loaded); otherwise
++						// when we've read enough lines to fill the view (InitialRefreshAfter).
++						// This swaps the off-screen content in and refreshes; we keep reading
++						// afterwards and refresh again at the end so the scrollbar ends up the
++						// right size.
++						if !painted {
++							var ready bool
++							if restore != nil {
++								ready = restore.FirstPaintReady()
++							} else {
++								ready = linesToRead.InitialRefreshAfter > 0 && linesRead >= linesToRead.InitialRefreshAfter
++							}
++							if ready {
++								// TODO: should probably use OnUIThread?
++								firstPaint()
++								refreshViewIfStale()
++							}
+ 						}
+ 					}
+ 					refreshViewIfStale()
+@@ -490,23 +727,18 @@ func (self *ViewBufferManager) NewTask(f func(TaskOpts) error, key string) error
+ 			return
+ 		}
+ 
+-		resetOrigin := self.GetTaskKey() != key && self.onNewKey != nil
++		// Note we don't reset the origin here even when the command key changed:
++		// that's deferred to the task's first paint (see resetOrigin / the task's
++		// ResetOrigin), so the previous content — left displayed off-screen until
++		// the swap — doesn't visibly jump to the top before the new content appears.
++		// The restore isn't cleared here either: it must outlive a task being stopped
++		// and replaced before it could paint, and it validates itself against the
++		// content it lands in (see restoreForNextTask), so a stale one can't apply to
++		// the wrong place — it's cleared once a task has applied it.
+ 		self.taskKey = key
+ 
+ 		self.taskIDMutex.Unlock()
+ 
+-		if resetOrigin {
+-			// onNewKey resets the view's scroll origin, which is view state the
+-			// UI thread reads while laying out and drawing, so do it there. This
+-			// must happen after releasing taskIDMutex: it blocks until the UI
+-			// thread runs it, and a NewTask call on the UI thread takes
+-			// taskIDMutex, so holding it here would deadlock.
+-			_ = self.onUIThread(func() error {
+-				self.onNewKey()
+-				return nil
+-			})
+-		}
+-
+ 		self.waitingMutex.Lock()
+ 
+ 		// Re-check staleness after acquiring waitingMutex: a newer task
+diff --git a/pkg/tasks/tasks_test.go b/pkg/tasks/tasks_test.go
+index 2cea139e8b3..8dd0c7f7c41 100644
+--- a/pkg/tasks/tasks_test.go
++++ b/pkg/tasks/tasks_test.go
+@@ -12,6 +12,7 @@ import (
+ 
+ 	"github.com/jesseduffield/lazygit/pkg/gocui"
+ 	"github.com/jesseduffield/lazygit/pkg/utils"
++	"github.com/stretchr/testify/assert"
+ )
+ 
+ func getCounter() (func(), func() int) {
+@@ -25,6 +26,8 @@ func TestNewCmdTaskInstantStop(t *testing.T) {
+ 	refreshView, getRefreshViewCallCount := getCounter()
+ 	onEndOfInput, getOnEndOfInputCallCount := getCounter()
+ 	onNewKey, getOnNewKeyCallCount := getCounter()
++	beginRender, getBeginRenderCallCount := getCounter()
++	swapInRender, getSwapInRenderCallCount := getCounter()
+ 	onDone, getOnDoneCallCount := getCounter()
+ 	task := gocui.NewFakeTask()
+ 	newTask := func() gocui.Task {
+@@ -38,6 +41,8 @@ func TestNewCmdTaskInstantStop(t *testing.T) {
+ 		refreshView,
+ 		onEndOfInput,
+ 		onNewKey,
++		beginRender,
++		swapInRender,
+ 		newTask,
+ 		// no UI thread in the test; run the view mutations inline
+ 		func(f func() error) error { return f() },
+@@ -54,7 +59,7 @@ func TestNewCmdTaskInstantStop(t *testing.T) {
+ 		return ExecCmd{Cmd: cmd}, reader
+ 	}
+ 
+-	fn := manager.NewCmdTask(start, "prefix\n", LinesToRead{20, -1, nil}, onDone)
++	fn := manager.NewCmdTask(start, "prefix\n", LinesToRead{Total: 20, InitialRefreshAfter: -1}, onDone)
+ 
+ 	_ = fn(TaskOpts{Stop: stop, InitialContentLoaded: func() { task.Done() }})
+ 
+@@ -67,6 +72,8 @@ func TestNewCmdTaskInstantStop(t *testing.T) {
+ 		{1, getRefreshViewCallCount(), "refreshView"},
+ 		{0, getOnEndOfInputCallCount(), "onEndOfInput"},
+ 		{0, getOnNewKeyCallCount(), "onNewKey"},
++		{0, getBeginRenderCallCount(), "beginRender"},
++		{0, getSwapInRenderCallCount(), "swapInRender"},
+ 		{1, getOnDoneCallCount(), "onDone"},
+ 	}
+ 	for _, expectation := range callCountExpectations {
+@@ -92,6 +99,8 @@ func TestNewCmdTask(t *testing.T) {
+ 	refreshView, getRefreshViewCallCount := getCounter()
+ 	onEndOfInput, getOnEndOfInputCallCount := getCounter()
+ 	onNewKey, getOnNewKeyCallCount := getCounter()
++	beginRender, getBeginRenderCallCount := getCounter()
++	swapInRender, getSwapInRenderCallCount := getCounter()
+ 	onDone, getOnDoneCallCount := getCounter()
+ 	task := gocui.NewFakeTask()
+ 	newTask := func() gocui.Task {
+@@ -105,6 +114,8 @@ func TestNewCmdTask(t *testing.T) {
+ 		refreshView,
+ 		onEndOfInput,
+ 		onNewKey,
++		beginRender,
++		swapInRender,
+ 		newTask,
+ 		// no UI thread in the test; run the view mutations inline
+ 		func(f func() error) error { return f() },
+@@ -119,7 +130,7 @@ func TestNewCmdTask(t *testing.T) {
+ 		return ExecCmd{Cmd: cmd}, reader
+ 	}
+ 
+-	fn := manager.NewCmdTask(start, "prefix\n", LinesToRead{20, -1, nil}, onDone)
++	fn := manager.NewCmdTask(start, "prefix\n", LinesToRead{Total: 20, InitialRefreshAfter: -1}, onDone)
+ 	wg := sync.WaitGroup{}
+ 	wg.Go(func() {
+ 		time.Sleep(100 * time.Millisecond)
+@@ -134,10 +145,12 @@ func TestNewCmdTask(t *testing.T) {
+ 		actual   int
+ 		name     string
+ 	}{
+-		{1, getBeforeStartCallCount(), "beforeStart"},
++		{0, getBeforeStartCallCount(), "beforeStart"},
+ 		{1, getRefreshViewCallCount(), "refreshView"},
+ 		{1, getOnEndOfInputCallCount(), "onEndOfInput"},
+ 		{0, getOnNewKeyCallCount(), "onNewKey"},
++		{1, getBeginRenderCallCount(), "beginRender"},
++		{1, getSwapInRenderCallCount(), "swapInRender"},
+ 		{1, getOnDoneCallCount(), "onDone"},
+ 	}
+ 	for _, expectation := range callCountExpectations {
+@@ -159,6 +172,77 @@ func TestNewCmdTask(t *testing.T) {
+ 
+ // A dummy reader that simply yields as many blank lines as requested. The only
+ // thing we want to do with the output is count the number of lines.
++// When a RenderRestore is set, the first paint is driven by its FirstPaintReady
++// predicate rather than the InitialRefreshAfter line count, and Apply runs exactly
++// once. Apply controls when the off-screen render is swapped in (it calls swapIn
++// after locating the target), so its scan runs while the previous content is still
++// displayed rather than revealing the new content at the old scroll. This is the
++// read-loop half of the escape restore. See RenderRestore.
++func TestNewCmdTaskRestore(t *testing.T) {
++	writer := bytes.NewBuffer(nil)
++	linesWritten := func() int { return strings.Count(writer.String(), "\n") }
++
++	swapped := false
++	applyCount := 0
++	applyAtLines := -1
++	swappedBeforeApply := false
++	swappedByApply := false
++
++	task := gocui.NewFakeTask()
++	manager := NewViewBufferManager(
++		utils.NewDummyLog(),
++		writer,
++		func() {},                 // beforeStart
++		func() {},                 // refreshView
++		func() {},                 // onEndOfInput
++		func() {},                 // onNewKey
++		func() {},                 // beginRender
++		func() { swapped = true }, // swapInRender
++		func() gocui.Task { return task },
++		// no UI thread in the test; run the view mutations inline
++		func(f func() error) error { return f() },
++	)
++
++	restore := &RenderRestore{
++		// Ready once five lines have loaded — well before InitialRefreshAfter (30).
++		FirstPaintReady: func() bool { return linesWritten() >= 5 },
++		Apply: func(swapIn func()) {
++			applyCount++
++			applyAtLines = linesWritten()
++			// The render must not be swapped in until Apply asks for it.
++			if swapped {
++				swappedBeforeApply = true
++			}
++			swapIn()
++			swappedByApply = swapped
++		},
++	}
++
++	stop := make(chan struct{})
++	reader := BlankLineReader{totalLinesToYield: 50}
++	start := func() (Cmd, io.Reader) {
++		cmd := exec.Command("blah")
++		return ExecCmd{Cmd: cmd}, &reader
++	}
++	fn := manager.NewCmdTask(start, "", LinesToRead{Total: 50, InitialRefreshAfter: 30, Restore: restore}, func() {})
++
++	wg := sync.WaitGroup{}
++	wg.Go(func() {
++		time.Sleep(100 * time.Millisecond)
++		close(stop)
++	})
++	_ = fn(TaskOpts{Stop: stop, InitialContentLoaded: func() { task.Done() }})
++	wg.Wait()
++
++	assert.Equal(t, 1, applyCount, "Apply should run exactly once")
++	assert.False(t, swappedBeforeApply, "the off-screen render should not be swapped in before Apply runs")
++	assert.True(t, swappedByApply, "Apply should swap the off-screen render in via swapIn")
++	// The first paint was driven by FirstPaintReady (>=5 lines), not by
++	// InitialRefreshAfter (30).
++	assert.GreaterOrEqual(t, applyAtLines, 5)
++	assert.Less(t, applyAtLines, 30)
++}
++
+ type BlankLineReader struct {
+ 	totalLinesToYield int
+ 	linesYielded      int
+@@ -186,37 +270,37 @@ func TestNewCmdTaskRefresh(t *testing.T) {
+ 		{
+ 			"total < initialRefreshAfter",
+ 			150,
+-			LinesToRead{100, 120, nil},
++			LinesToRead{Total: 100, InitialRefreshAfter: 120},
+ 			[]int{100},
+ 		},
+ 		{
+ 			"total == initialRefreshAfter",
+ 			150,
+-			LinesToRead{100, 100, nil},
++			LinesToRead{Total: 100, InitialRefreshAfter: 100},
+ 			[]int{100},
+ 		},
+ 		{
+ 			"total > initialRefreshAfter",
+ 			150,
+-			LinesToRead{100, 50, nil},
++			LinesToRead{Total: 100, InitialRefreshAfter: 50},
+ 			[]int{50, 100},
+ 		},
+ 		{
+ 			"initialRefreshAfter == -1",
+ 			150,
+-			LinesToRead{100, -1, nil},
++			LinesToRead{Total: 100, InitialRefreshAfter: -1},
+ 			[]int{100},
+ 		},
+ 		{
+ 			"totalTaskLines < initialRefreshAfter",
+ 			25,
+-			LinesToRead{100, 50, nil},
++			LinesToRead{Total: 100, InitialRefreshAfter: 50},
+ 			[]int{25},
+ 		},
+ 		{
+ 			"totalTaskLines between total and initialRefreshAfter",
+ 			75,
+-			LinesToRead{100, 50, nil},
++			LinesToRead{Total: 100, InitialRefreshAfter: 50},
+ 			[]int{50, 75},
+ 		},
+ 	}
+@@ -240,6 +324,8 @@ func TestNewCmdTaskRefresh(t *testing.T) {
+ 			refreshView,
+ 			func() {},
+ 			func() {},
++			func() {},
++			func() {},
+ 			newTask,
+ 			// no UI thread in the test; run the view mutations inline
+ 			func(f func() error) error { return f() },
+diff --git a/schema-master/config.json b/schema-master/config.json
+index 82dbebb0b7f..306cafb5841 100644
+--- a/schema-master/config.json
++++ b/schema-master/config.json
+@@ -321,7 +321,7 @@
+             "$ref": "#/$defs/PagingConfig"
+           },
+           "type": "array",
+-          "description": "Array of pagers. Each entry has the following format:\n\n  # A name for the pager, shown in the notification when cycling pagers.\n  # If not set, the name is derived from the first word of the pager\n  # command (or of the external diff command).\n  name: \"\"\n\n  # Value of the --color arg in the git diff command. Some pagers want\n  # this to be set to 'always' and some want it set to 'never'\n  colorArg: \"always\"\n\n  # e.g.\n  # diff-so-fancy\n  # delta --dark --paging=never\n  # ydiff -p cat -s --wrap --width={{columnWidth}}\n  pager: \"\"\n\n  # e.g. 'difft --color=always'\n  externalDiffCommand: \"\"\n\n  # If true, Lazygit will use git's `diff.external` config for paging.\n  # The advantage over `externalDiffCommand`…
++          "description": "Array of pagers. Each entry has the following format:\n\n  # A name for the pager, shown in the notification when cycling pagers.\n  # If not set, the name is derived from the first word of the pager\n  # command (or of the external diff command).\n  name: \"\"\n\n  # Value of the --color arg in the git diff command. Some pagers want\n  # this to be set to 'always' and some want it set to 'never'\n  colorArg: \"always\"\n\n  # If true, selected diff lines are highlighted only with a narrow bar\n  # at the left edge of the view, rather than across the whole width.\n  # Useful for pagers whose own line background colors should remain\n  # visible.\n  narrowSelectionHighlight: false\n\n  # e.g.\n  # diff-so-fancy\n  # delta --dark …
+         },
+         "commit": {
+           "$ref": "#/$defs/CommitConfig",
+@@ -3558,6 +3558,10 @@
+           ],
+           "description": "Value of the --color arg in the git diff command. Some pagers want this to be set to 'always' and some want it set to 'never'"
+         },
++        "narrowSelectionHighlight": {
++          "type": "boolean",
++          "description": "If true, selected diff lines are highlighted only with a narrow bar at the left edge of the view, rather than across the whole width. Useful for pagers whose own line background colors should remain visible."
++        },
+         "pager": {
+           "type": "string",
+           "description": "e.g.\ndiff-so-fancy\ndelta --dark --paging=never\nydiff -p cat -s --wrap --width={{columnWidth}}",
+
+
+Wall time: 2.78 seconds
