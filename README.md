@@ -20,11 +20,18 @@ Implemented in this repo:
 - Config loading + keybinding remap support
 - Env-gated live smoke test against a public PR
 
-Still product-roadmapped beyond this phase:
-- authoring/reply/submit-review flows
+Also shipped beyond that phase (Phase 2 authoring core):
+- inline, multi-line and file-level comments against a server-side pending review
+- reply, edit and delete drafts; submit-review menu with discard confirm
+- resolve/unresolve from the Threads panel
+- markdown-rendered comment bodies, foldable PR overview, author bot/human flags
+
+Still product-roadmapped:
+- suggestions (`s`), context expansion `{`/`}`, whitespace toggle, Checks watch mode,
+  Timeline issue comments, `ctrl+e` draft in `$EDITOR`
 - merge/checkout/editor integration
 - cross-repo inbox
-- full Phase 2 / 3 workflow coverage from the design docs
+- GHE hostnames, custom commands
 
 ## Requirements
 
